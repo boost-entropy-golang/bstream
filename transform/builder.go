@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/streamingfast/bstream"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -48,7 +49,7 @@ func (r *Registry) BuildFromTransforms(anyTransforms []*anypb.Any) (
 			return nil, nil, "", fmt.Errorf("cannot build preprocessor func from 'Passthrough' type of transform")
 		}
 
-		descs = append(descs, transform.String())
+		descs = append(descs, t.String())
 
 		var matches bool
 		if pp, ok := t.(PreprocessTransform); ok {
@@ -59,9 +60,8 @@ func (r *Registry) BuildFromTransforms(anyTransforms []*anypb.Any) (
 		if bipg, ok := t.(bstream.BlockIndexProviderGetter); ok {
 			matches = true
 			if blockIndexProvider != nil { // TODO eventually, should we support multiple indexes ?
-				zlog.Warn("multiple index providers from transform, ignoring")
+				zlog.Warn("multiple index providers from transform, ignoring this one", zap.Stringer("transform", t))
 			} else {
-				zlog.Info("using index on transform")
 				blockIndexProvider = bipg.GetIndexProvider()
 			}
 		}
