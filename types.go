@@ -81,6 +81,14 @@ func (b BasicBlockRef) String() string {
 	return blockRefAsAstring(b)
 }
 
+func IsEmpty(ref BlockRef) bool {
+	if ref == nil {
+		return true
+	}
+
+	return ref.Num() == 0 && ref.ID() == ""
+}
+
 func EqualsBlockRefs(left, right BlockRef) bool {
 	if left == right {
 		return true
@@ -104,4 +112,26 @@ func blockRefAsAstring(source gettableBlockNumAndID) string {
 	}
 
 	return fmt.Sprintf("#%d (%s)", source.Num(), source.ID())
+}
+
+type BlockWithObj struct {
+	Block *Block
+	Obj   interface{}
+}
+
+type wrappedObject struct {
+	obj    interface{}
+	cursor *Cursor
+}
+
+func (w *wrappedObject) Step() StepType {
+	return w.cursor.Step
+}
+
+func (w *wrappedObject) WrappedObject() interface{} {
+	return w.obj
+}
+
+func (w *wrappedObject) Cursor() *Cursor {
+	return w.cursor
 }

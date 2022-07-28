@@ -28,107 +28,163 @@ import (
 
 var currentOpenFiles int64
 
-type NotFoundCallbackFunc func(blockNum uint64, highestFileProcessedBlock BlockRef, handler Handler, logger *zap.Logger) error
-
 type FileSource struct {
 	*shutter.Shutter
 
-	oneBlockFileMode bool
 	// blocksStore is where we access the blocks archives.
 	blocksStore dstore.Store
-
-	// secondaryBlocksStores is an optional list of blocksStores where we look for blocks archives that were not found, in order
-	secondaryBlocksStores []dstore.Store
-
 	// blockReaderFactory creates a new `BlockReader` from an `io.Reader` instance
 	blockReaderFactory BlockReaderFactory
 
 	startBlockNum uint64
-	preprocFunc   PreprocessFunc
+	stopBlockNum  uint64
+	bundleSize    uint64
+
+	preprocFunc PreprocessFunc
 	// gates incoming blocks based on Gator type BEFORE pre-processing
 	gator Gator
 
-	// fileStream is a chan of blocks coming from blocks archives, ordered
-	// and parallelly processed
-	fileStream         chan *incomingBlocksFile
-	oneBlockFileStream chan *incomingOneBlockFiles
-
 	handler Handler
+
 	// retryDelay determines the time between attempts to retry the
 	// download of blocks archives (most of the time, waiting for the
 	// blocks archive to be written by some other process in semi
 	// real-time)
-	retryDelay time.Duration
-
-	notFoundCallback NotFoundCallbackFunc
-
-	logger                  *zap.Logger
+	retryDelay              time.Duration
 	preprocessorThreadCount int
 
+	// fileStream is a chan of blocks coming from blocks archives, ordered
+	// and parallel processed
+	fileStream                chan *incomingBlocksFile
 	highestFileProcessedBlock BlockRef
+	blockIndexProvider        BlockIndexProvider
+
+	logger *zap.Logger
 }
 
 type FileSourceOption = func(s *FileSource)
 
-func FileSourceWithTimeThresholdGator(threshold time.Duration) FileSourceOption {
-	return func(s *FileSource) {
-		s.logger.Info("setting time gator", zap.Duration("threshold", threshold))
-		s.gator = NewTimeThresholdGator(threshold)
-	}
-}
-
-func FileSourceWithConcurrentPreprocess(threadCount int) FileSourceOption {
+func FileSourceWithConcurrentPreprocess(preprocFunc PreprocessFunc, threadCount int) FileSourceOption {
 	return func(s *FileSource) {
 		s.preprocessorThreadCount = threadCount
+		s.preprocFunc = preprocFunc
 	}
 }
 
-// FileSourceWithSecondaryBlocksStores adds a list of dstore.Store that will be tried in order, in case the default store does not contain the expected blockfile
-func FileSourceWithSecondaryBlocksStores(blocksStores []dstore.Store) FileSourceOption {
+func FileSourceWithRetryDelay(delay time.Duration) FileSourceOption {
 	return func(s *FileSource) {
-		s.secondaryBlocksStores = blocksStores
+		s.retryDelay = delay
 	}
 }
-
-func FileSourceWithLogger(logger *zap.Logger) FileSourceOption {
+func FileSourceWithStopBlock(stopBlock uint64) FileSourceOption {
 	return func(s *FileSource) {
-		s.logger = logger
+		s.stopBlockNum = stopBlock
 	}
 }
 
-func FileSourceWithNotFoundCallBack(callBack NotFoundCallbackFunc) FileSourceOption {
+func FileSourceWithBundleSize(bundleSize uint64) FileSourceOption {
 	return func(s *FileSource) {
-		s.notFoundCallback = callBack
+		s.bundleSize = bundleSize
 	}
 }
 
-// NewFileSource will pipe potentially stream you 99 blocks before the given `startBlockNum`.
+func FileSourceWithBlockIndexProvider(prov BlockIndexProvider) FileSourceOption {
+	return func(s *FileSource) {
+		s.blockIndexProvider = prov
+	}
+}
+
+type FileSourceFactory struct {
+	mergedBlocksStore dstore.Store
+	oneBlocksStore    dstore.Store
+	logger            *zap.Logger
+	options           []FileSourceOption
+}
+
+func NewFileSourceFactory(
+	mergedBlocksStore dstore.Store,
+	oneBlocksStore dstore.Store,
+	logger *zap.Logger,
+	options ...FileSourceOption,
+) *FileSourceFactory {
+	return &FileSourceFactory{
+		mergedBlocksStore: mergedBlocksStore,
+		oneBlocksStore:    oneBlocksStore,
+		logger:            logger,
+		options:           options,
+	}
+}
+
+func (g *FileSourceFactory) SourceFromBlockNum(start uint64, h Handler) Source {
+	return NewFileSource(
+		g.mergedBlocksStore,
+		start,
+		h,
+		g.logger,
+		g.options...,
+	)
+}
+
+func (g *FileSourceFactory) SourceFromCursor(cursor *Cursor, h Handler) Source {
+	return NewFileSourceFromCursor(
+		g.mergedBlocksStore,
+		g.oneBlocksStore,
+		cursor,
+		h,
+		g.logger,
+		g.options...,
+	)
+}
+
+func NewFileSourceFromCursor(
+	mergedBlocksStore dstore.Store,
+	oneBlocksStore dstore.Store,
+	cursor *Cursor,
+	h Handler,
+	logger *zap.Logger,
+	options ...FileSourceOption,
+) *FileSource {
+
+	wrappedHandler := newCursorResolverHandler(oneBlocksStore, cursor, h, logger)
+
+	return NewFileSource(
+		mergedBlocksStore,
+		cursor.LIB.Num(),
+		wrappedHandler,
+		logger,
+		options...)
+
+}
+
+func fileSourceBundleSizeFromOptions(options []FileSourceOption) uint64 {
+	dummyFileSource := NewFileSource(nil, 0, nil, nil, options...)
+	for _, opt := range options {
+		opt(dummyFileSource)
+	}
+	return dummyFileSource.bundleSize
+}
+
 func NewFileSource(
 	blocksStore dstore.Store,
 	startBlockNum uint64,
-	parallelDownloads int,
-	preprocFunc PreprocessFunc,
 	h Handler,
+	logger *zap.Logger,
 	options ...FileSourceOption,
+
 ) *FileSource {
 	blockReaderFactory := GetBlockReaderFactory
 
 	s := &FileSource{
-		startBlockNum:           startBlockNum,
-		blocksStore:             blocksStore,
-		blockReaderFactory:      blockReaderFactory,
-		fileStream:              make(chan *incomingBlocksFile, parallelDownloads),
-		oneBlockFileStream:      make(chan *incomingOneBlockFiles, parallelDownloads),
-		Shutter:                 shutter.New(),
-		preprocFunc:             preprocFunc,
-		retryDelay:              4 * time.Second,
-		handler:                 h,
-		logger:                  zlog,
-		preprocessorThreadCount: 1,
+		startBlockNum:      startBlockNum,
+		bundleSize:         100,
+		blocksStore:        blocksStore,
+		blockReaderFactory: blockReaderFactory,
+		fileStream:         make(chan *incomingBlocksFile, 1),
+		Shutter:            shutter.New(),
+		retryDelay:         4 * time.Second,
+		handler:            h,
+		logger:             logger,
 	}
-
-	blockStoreUrl := blocksStore.BaseURL()
-	s.oneBlockFileMode = len(blockStoreUrl.Query()["oneblocks"]) > 0
 
 	for _, option := range options {
 		option(s)
@@ -141,19 +197,17 @@ func (s *FileSource) Run() {
 	s.Shutdown(s.run())
 }
 
-func (s *FileSource) run() error {
-	if s.oneBlockFileMode {
-		return s.runOneBlockFile()
-	}
-	return s.runMergeFile()
+func (s *FileSource) checkExists(baseBlockNum uint64) (bool, string, error) {
+	baseFilename := fmt.Sprintf("%010d", baseBlockNum)
+	exists, err := s.blocksStore.FileExists(context.Background(), baseFilename)
+	return exists, baseFilename, err
 }
 
-func (s *FileSource) runMergeFile() error {
+func (s *FileSource) run() (err error) {
 
 	go s.launchSink()
 
-	const filesBlocksIncrement = 100 /// HARD-CODED CONFIG HERE!
-	currentIndex := s.startBlockNum
+	baseBlockNum := lowBoundary(s.startBlockNum, s.bundleSize)
 	var delay time.Duration
 	for {
 		select {
@@ -163,85 +217,119 @@ func (s *FileSource) runMergeFile() error {
 		case <-time.After(delay):
 		}
 
-		ctx := context.Background()
+		var filteredBlocks []uint64
+		if s.blockIndexProvider != nil {
+			nextBase, matching, noMoreIndex := s.lookupBlockIndex(baseBlockNum)
+			if noMoreIndex {
+				s.blockIndexProvider = nil
 
-		baseBlockNum := currentIndex - (currentIndex % filesBlocksIncrement)
-		s.logger.Debug("file stream looking for", zap.Uint64("base_block_num", baseBlockNum))
+				exists, _, _ := s.checkExists(nextBase)
+				if !exists && nextBase > baseBlockNum {
+					matching = nil
+					nextBase -= s.bundleSize
+					s.logger.Debug("index pushing us farther than the last bundle, reading previous one entirely", zap.Uint64("next_base", nextBase))
+				} else {
+					if nextExists, _, _ := s.checkExists(nextBase + s.bundleSize); !nextExists {
+						matching = nil
+						s.logger.Debug("index pushing us to the last bundle, reading it entirely", zap.Uint64("next_base", nextBase))
+					}
+				}
+			}
 
-		blocksStore := s.blocksStore // default
-		baseFilename := fmt.Sprintf("%010d", baseBlockNum)
+			filteredBlocks = matching
+			baseBlockNum = nextBase
+		}
 
-		exists, err := blocksStore.FileExists(ctx, baseFilename)
+		exists, baseFilename, err := s.checkExists(baseBlockNum)
 		if err != nil {
 			return fmt.Errorf("reading file existence: %w", err)
 		}
 
-		if !exists && s.secondaryBlocksStores != nil {
-			for _, bs := range s.secondaryBlocksStores {
-				found, err := bs.FileExists(ctx, baseFilename)
-				if err != nil {
-					return fmt.Errorf("reading file existence: %w", err)
-				}
-				if found {
-					exists = true
-					blocksStore = bs
-					break
-				}
-			}
-		}
-
 		if !exists {
-			s.logger.Info("reading from blocks store: file does not (yet?) exist, retrying in", zap.String("filename", blocksStore.ObjectPath(baseFilename)), zap.String("base_filename", baseFilename), zap.Any("retry_delay", s.retryDelay), zap.Int("secondary_blocks_stores_count", len(s.secondaryBlocksStores)))
+			s.logger.Info("reading from blocks store: file does not (yet?) exist, retrying in", zap.String("filename", s.blocksStore.ObjectPath(baseFilename)), zap.String("base_filename", baseFilename), zap.Any("retry_delay", s.retryDelay))
 			delay = s.retryDelay
-
-			if s.notFoundCallback != nil {
-				s.logger.Info("asking merger for missing files", zap.Uint64("base_block_num", baseBlockNum))
-				mergerBaseBlockNum := baseBlockNum
-				if mergerBaseBlockNum < GetProtocolFirstStreamableBlock {
-					mergerBaseBlockNum = GetProtocolFirstStreamableBlock
-				}
-				if err := s.notFoundCallback(mergerBaseBlockNum, s.highestFileProcessedBlock, s.handler, s.logger); err != nil {
-					s.logger.Debug("not found callback return an error, shutting down source")
-					return fmt.Errorf("not found callback returned an err: %w", err)
-				}
-			}
 			continue
 		}
 		delay = 0 * time.Second
 
-		newIncomingFile := &incomingBlocksFile{
-			filename: baseFilename,
-			//todo: this channel size should be 0 or configurable. This is a memory pit!
-			//todo: ... there is not multithread after this point.
-			blocks: make(chan *PreprocessedBlock, 2),
-		}
+		// container that is sent to s.fileStream
+		newIncomingFile := newIncomingBlocksFile(baseFilename, filteredBlocks)
 
-		s.logger.Debug("downloading archive file", zap.String("filename", newIncomingFile.filename))
 		select {
 		case <-s.Terminating():
 			return s.Err()
 		case s.fileStream <- newIncomingFile:
-			zlog.Debug("new incoming file", zap.String("file_name", newIncomingFile.filename))
+			zlog.Debug("new incoming file", zap.String("filename", newIncomingFile.filename))
 		}
 
 		go func() {
 			s.logger.Debug("launching processing of file", zap.String("base_filename", baseFilename))
-			if err := s.streamIncomingFile(newIncomingFile, blocksStore); err != nil {
+			if err := s.streamIncomingFile(newIncomingFile, s.blocksStore); err != nil {
 				s.Shutdown(fmt.Errorf("processing of file %q failed: %w", baseFilename, err))
 			}
 		}()
 
-		currentIndex += filesBlocksIncrement
+		baseBlockNum += s.bundleSize
+		if s.stopBlockNum != 0 && baseBlockNum > s.stopBlockNum {
+			close(s.fileStream)
+			<-s.Terminating()
+			return nil
+		}
 	}
 }
 
-type retryableError struct{ error }
+func (s *FileSource) lookupBlockIndex(in uint64) (baseBlock uint64, outBlocks []uint64, noMoreIndex bool) {
+	if s.stopBlockNum != 0 && in > s.stopBlockNum {
+		return in, nil, true
+	}
 
-func (e retryableError) Error() string { return e.error.Error() }
-func (e retryableError) Unwrap() error { return e.error }
-func isRetryable(err error) bool       { _, ok := err.(retryableError); return ok }
+	baseBlock = in
+	for {
+		blocks, err := s.blockIndexProvider.BlocksInRange(baseBlock, s.bundleSize)
+		if err != nil {
+			s.logger.Debug("blocks_in_range returns error, deactivating",
+				zap.Uint64("base_block", baseBlock),
+				zap.Error(err),
+			)
+			return baseBlock, nil, true
+		}
 
-func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead BlockRef, output chan *PreprocessedBlock) (lastBlockRead BlockRef, err error) {
+		for _, blk := range blocks {
+			if blk < s.startBlockNum {
+				continue
+			}
+			if in <= s.startBlockNum && blk > s.startBlockNum && len(outBlocks) == 0 {
+				outBlocks = append(outBlocks, s.startBlockNum)
+			}
+			if s.stopBlockNum != 0 && blk >= s.stopBlockNum {
+				outBlocks = append(outBlocks, s.stopBlockNum)
+				break
+			}
+			outBlocks = append(outBlocks, blk)
+		}
+
+		if outBlocks == nil {
+			containsStartBlock := baseBlock <= s.startBlockNum && baseBlock+s.bundleSize > s.startBlockNum
+			containsStopBlock := s.stopBlockNum != 0 && baseBlock <= s.stopBlockNum && baseBlock+s.bundleSize > s.stopBlockNum
+			if containsStartBlock && containsStopBlock {
+				return baseBlock, []uint64{s.startBlockNum, s.stopBlockNum}, false
+			}
+			if containsStartBlock {
+				return baseBlock, []uint64{s.startBlockNum}, false
+			}
+			if containsStopBlock {
+				return baseBlock, []uint64{s.stopBlockNum}, false
+			}
+
+			baseBlock += s.bundleSize
+			continue
+		}
+
+		return baseBlock, outBlocks, false
+	}
+}
+
+func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead BlockRef, incomingBlockFile *incomingBlocksFile) (lastBlockRead BlockRef, err error) {
 	var previousLastBlockPassed bool
 	if prevLastBlockRead == nil {
 		previousLastBlockPassed = true
@@ -252,7 +340,7 @@ func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead Blo
 
 	go func() {
 		defer close(done)
-		defer close(output)
+		defer close(incomingBlockFile.blocks)
 
 		for {
 			select {
@@ -269,8 +357,7 @@ func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead Blo
 					select {
 					case <-s.Terminating():
 						return
-					case output <- preprocessBlock:
-						zlog.Debug("got preprocessor result", zap.Stringer("block_ref", preprocessBlock.Block))
+					case incomingBlockFile.blocks <- preprocessBlock:
 						lastBlockRead = preprocessBlock.Block.AsRef()
 					}
 				}
@@ -287,7 +374,7 @@ func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead Blo
 		blk, err = blockReader.Read()
 		if err != nil && err != io.EOF {
 			close(preprocessed)
-			return lastBlockRead, retryableError{err} // unexpected error
+			return lastBlockRead, err
 		}
 
 		if err == io.EOF && (blk == nil || blk.Num() == 0) {
@@ -297,6 +384,10 @@ func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead Blo
 
 		blockNum := blk.Num()
 		if blockNum < s.startBlockNum {
+			continue
+		}
+
+		if !incomingBlockFile.PassesFilter(blockNum) {
 			continue
 		}
 
@@ -337,6 +428,15 @@ func (s *FileSource) preprocess(block *Block, out chan *PreprocessedBlock) {
 			return
 		}
 	}
+	obj = &wrappedObject{
+		obj: obj,
+		cursor: &Cursor{
+			Step:      StepNewIrreversible,
+			Block:     block.AsRef(),
+			LIB:       block.AsRef(),
+			HeadBlock: block.AsRef(),
+		}}
+
 	zlog.Debug("block pre processed", zap.Stringer("block_ref", block))
 	select {
 	case <-s.Terminating():
@@ -351,36 +451,22 @@ func (s *FileSource) streamIncomingFile(newIncomingFile *incomingBlocksFile, blo
 	defer atomic.AddInt64(&currentOpenFiles, -1)
 
 	var skipBlocksBefore BlockRef
-	attempt := 0
-	for {
 
-		reader, err := blocksStore.OpenObject(context.Background(), newIncomingFile.filename)
-		if err != nil {
-			return fmt.Errorf("fetching %s from block store: %w", newIncomingFile.filename, err)
-		}
-
-		blockReader, err := s.blockReaderFactory.New(reader)
-		if err != nil {
-			reader.Close()
-			return fmt.Errorf("unable to create block reader: %w", err)
-		}
-
-		lastBlockRead, err := s.streamReader(blockReader, skipBlocksBefore, newIncomingFile.blocks)
-		reader.Close()
-		if err == nil || s.IsTerminating() {
-			return nil
-		}
-		if isRetryable(err) {
-			if attempt > 2 {
-				return fmt.Errorf("too many errors processing incoming file after %d attempts: %w", attempt+1, err)
-			}
-			zlog.Warn("reading file stream triggered an error", zap.Error(err))
-			attempt++
-			skipBlocksBefore = lastBlockRead
-			continue
-		}
-		return fmt.Errorf("non-retryable error processing incoming file: %w", err)
+	reader, err := blocksStore.OpenObject(context.Background(), newIncomingFile.filename)
+	if err != nil {
+		return fmt.Errorf("fetching %s from block store: %w", newIncomingFile.filename, err)
 	}
+	defer reader.Close()
+
+	blockReader, err := s.blockReaderFactory.New(reader)
+	if err != nil {
+		return fmt.Errorf("unable to create block reader: %w", err)
+	}
+
+	if _, err := s.streamReader(blockReader, skipBlocksBefore, newIncomingFile); err != nil {
+		return fmt.Errorf("error processing incoming file: %w", err)
+	}
+	return nil
 }
 
 func (s *FileSource) launchSink() {
@@ -389,7 +475,11 @@ func (s *FileSource) launchSink() {
 		case <-s.Terminating():
 			zlog.Debug("terminating by launch sink")
 			return
-		case incomingFile := <-s.fileStream:
+		case incomingFile, ok := <-s.fileStream:
+			if !ok {
+				s.Shutdown(nil)
+				return
+			}
 			s.logger.Debug("feeding from incoming file", zap.String("filename", incomingFile.filename))
 
 			for preBlock := range incomingFile.blocks {

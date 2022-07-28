@@ -15,33 +15,11 @@
 package forkable
 
 import (
-	"time"
-
 	"github.com/streamingfast/bstream"
-	pbblockmeta "github.com/streamingfast/pbgo/sf/blockmeta/v1"
 	"go.uber.org/zap"
 )
 
 type Option func(f *Forkable)
-
-func FromCursor(cursor *bstream.Cursor) Option {
-	return func(f *Forkable) {
-
-		if cursor.IsEmpty() {
-			return
-		}
-		f.forkDB.InitLIB(cursor.LIB)
-
-		// this should simply gate until we see those specific cursor values
-		f.gateCursor = cursor
-	}
-}
-
-func WithCustomLIBNumGetter(getter LIBNumGetter) Option {
-	return func(f *Forkable) {
-		f.libnumGetter = getter
-	}
-}
 
 func WithLogger(logger *zap.Logger) Option {
 	return func(f *Forkable) {
@@ -63,20 +41,22 @@ func WithExclusiveLIB(irreversibleBlock bstream.BlockRef) Option {
 	}
 }
 
-func WithIrreversibilityChecker(blockIDClient pbblockmeta.BlockIDClient, delayBetweenChecks time.Duration) Option {
-	return func(f *Forkable) {
-		f.irrChecker = &irreversibilityChecker{
-			blockIDClient:      blockIDClient,
-			delayBetweenChecks: delayBetweenChecks,
-			answer:             make(chan bstream.BasicBlockRef),
-		}
-	}
-}
-
 // WithFilters choses the steps we want to pass through the sub handler. It defaults to StepsAll upon creation.
 func WithFilters(steps bstream.StepType) Option {
 	return func(f *Forkable) {
 		f.filterSteps = steps
+	}
+}
+
+func HoldBlocksUntilLIB() Option {
+	return func(f *Forkable) {
+		f.holdBlocksUntilLIB = true
+	}
+}
+
+func WithKeptFinalBlocks(count int) Option {
+	return func(f *Forkable) {
+		f.keptFinalBlocks = count
 	}
 }
 

@@ -6,16 +6,7 @@ import (
 	"strings"
 
 	"github.com/streamingfast/opaque"
-	pbbstream "github.com/streamingfast/pbgo/sf/bstream/v1"
 )
-
-type Cursorable interface {
-	Cursor() *Cursor
-}
-
-type Stepable interface {
-	Step() StepType
-}
 
 type Cursor struct {
 	Step  StepType
@@ -35,51 +26,12 @@ var EmptyCursor = &Cursor{
 	LIB:       BlockRefEmpty,
 }
 
-func (c *Cursor) ToProto() pbbstream.Cursor {
-	out := pbbstream.Cursor{
-		Block: &pbbstream.BlockRef{
-			Num: c.Block.Num(),
-			Id:  c.Block.ID(),
-		},
-		HeadBlock: &pbbstream.BlockRef{
-			Num: c.HeadBlock.Num(),
-			Id:  c.HeadBlock.ID(),
-		},
-		Lib: &pbbstream.BlockRef{
-			Num: c.LIB.Num(),
-			Id:  c.LIB.ID(),
-		},
-	}
-	switch c.Step {
-	case StepNew, StepRedo:
-		out.Step = pbbstream.ForkStep_STEP_NEW
-	case StepUndo:
-		out.Step = pbbstream.ForkStep_STEP_UNDO
-	case StepIrreversible:
-		out.Step = pbbstream.ForkStep_STEP_IRREVERSIBLE
-	}
-	return out
+func (c *Cursor) IsOnFinalBlock() bool {
+	return c.Block.Num() == c.LIB.Num() && c.Step.Matches(StepIrreversible)
 }
 
 func (c *Cursor) ToOpaque() string {
 	return opaque.EncodeString(c.String())
-}
-
-func CursorFromProto(in *pbbstream.Cursor) *Cursor {
-	out := &Cursor{
-		Block:     NewBlockRef(in.Block.Id, in.Block.Num),
-		HeadBlock: NewBlockRef(in.HeadBlock.Id, in.HeadBlock.Num),
-		LIB:       NewBlockRef(in.Lib.Id, in.Lib.Num),
-	}
-	switch in.Step {
-	case pbbstream.ForkStep_STEP_NEW:
-		out.Step = StepNew
-	case pbbstream.ForkStep_STEP_UNDO:
-		out.Step = StepUndo
-	case pbbstream.ForkStep_STEP_IRREVERSIBLE:
-		out.Step = StepIrreversible
-	}
-	return out
 }
 
 func CursorFromOpaque(in string) (*Cursor, error) {
@@ -237,8 +189,12 @@ func readCursorStep(part string) (StepType, error) {
 	}
 	out := StepType(step)
 
-	if !out.IsSingleStep() {
+	if out != StepNew &&
+		out != StepUndo &&
+		out != StepIrreversible {
 		return 0, fmt.Errorf("invalid step: %d", step)
 	}
+
 	return out, nil
+
 }

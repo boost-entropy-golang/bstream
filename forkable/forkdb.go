@@ -35,10 +35,15 @@ type ForkDB struct {
 	// links contain block_id -> previous_block_id
 	links     map[string]string
 	linksLock sync.Mutex
-	// nums contain block_id -> block_num. For blocks that were not EXPLICITLY added through AddLink (as the first BlockRef) or added through InitLIB(), the number will not be set. A missing reference means this is a block ID pointing to a non-LIB, yet Root block that we have obtains only through it being referenced as a PreviousID in an AddBlock call.
+
+	// nums contain block_id -> block_num. For blocks that were not EXPLICITLY added through AddLink
+	// (as the first BlockRef) or added through InitLIB(), the number will not be set.
+	// A missing reference means this is a block ID pointing to a non-LIB, yet Root block that we have
+	// obtains only through it being referenced as a PreviousID in an AddBlock call.
 	nums map[string]uint64
 
-	// objects contain objects of whatever nature you want to associate with blocks (lists of transaction IDs, Block, etc..
+	// objects contain objects of whatever nature you want to associate with blocks
+	// (lists of transaction IDs, Block, etc..)
 	objects map[string]interface{}
 
 	libRef bstream.BlockRef
@@ -79,26 +84,7 @@ func (f *ForkDB) SetLogger(logger *zap.Logger) {
 	f.logger = logger
 }
 
-// TrySetLIB will move the lib if crawling from the given blockID up to the dposlibNum
-// succeeds, giving us effectively the dposLIBID. It will perform the set LIB and set
-// the new headBlockID
-// unknown behaviour if it was already set ... maybe it explodes
-func (f *ForkDB) TrySetLIB(headRef bstream.BlockRef, previousRefID string, libNum uint64) {
-	if headRef.Num() == bstream.GetProtocolFirstStreamableBlock {
-		f.libRef = headRef
-		f.logger.Debug("TrySetLIB received first streamable block of chain, assuming it's the new LIB", zap.Stringer("lib", f.libRef))
-		return
-	}
-	libRef := f.BlockInCurrentChain(headRef, libNum)
-	if libRef.ID() == "" {
-		f.logger.Debug("missing links to back fill cache to LIB num", zap.String("head_id", headRef.ID()), zap.Uint64("head_num", headRef.Num()), zap.Uint64("previous_ref_num", headRef.Num()), zap.Uint64("lib_num", libNum), zap.Uint64("get_protocol_first_block", bstream.GetProtocolFirstStreamableBlock))
-		return
-	}
-
-	_ = f.MoveLIB(libRef)
-}
-
-//Set a new lib without cleaning up blocks older then new lib (NO MOVE)
+//Set a new lib without cleaning up blocks older then new lib (NO PURGE)
 func (f *ForkDB) SetLIB(headRef bstream.BlockRef, previousRefID string, libNum uint64) {
 	if headRef.Num() == bstream.GetProtocolFirstStreamableBlock {
 		f.libRef = headRef
@@ -111,7 +97,7 @@ func (f *ForkDB) SetLIB(headRef bstream.BlockRef, previousRefID string, libNum u
 		return
 	}
 
-	f.libRef = libRef
+	f.MoveLIB(libRef)
 }
 
 // Get the last irreversible block ID
@@ -258,11 +244,65 @@ func (f *ForkDB) BlockInCurrentChain(startAtBlock bstream.BlockRef, blockNum uin
 	}
 }
 
+// CompleteSegment is like ReversibleSegment but keeps going passed lib
+func (f *ForkDB) CompleteSegment(startBlock bstream.BlockRef) (blocks []*Block, reachLIB bool) {
+	f.linksLock.Lock()
+	defer f.linksLock.Unlock()
+
+	var reversedBlocks []*Block
+
+	curID := startBlock.ID()
+	curNum := startBlock.Num()
+
+	// Those are for debugging purposes, they are the value of `curID` and `curNum`
+	// just before those are switched to a previous parent link,
+	prevID := ""
+
+	seenIDs := make(map[string]bool)
+	for {
+		if curID == f.libRef.ID() {
+			reachLIB = true
+		}
+
+		prev, found := f.links[curID]
+		if !found {
+			break
+		}
+
+		reversedBlocks = append(reversedBlocks, &Block{
+			BlockID:         curID,
+			BlockNum:        curNum,
+			Object:          f.objects[curID],
+			PreviousBlockID: prev, // fixme: is this ok ?
+		})
+
+		seenIDs[prevID] = true // fixme: same thing there, shouldn't we use prev instead of prevID
+		prevID = curID
+
+		curID = prev
+		curNum = f.nums[prev]
+
+		if seenIDs[curID] {
+			zlog.Error("loop detected in reversible segment", zap.String("cur_id", curID), zap.Uint64("cur_num", curNum))
+			return nil, false
+		}
+	}
+
+	// Reverse sort `blocks`
+	blocks = make([]*Block, len(reversedBlocks))
+	j := 0
+	for i := len(reversedBlocks); i != 0; i-- {
+		blocks[j] = reversedBlocks[i-1]
+		j++
+	}
+	return
+}
+
 // ReversibleSegment returns the blocks between the previous
 // irreversible Block ID and the given block ID.  The LIB is
 // excluded and the given block ID is included in the results.
 //
-// Do not call this function is the .HasLIB() is false, as the result
+// Do not call this function if the `.HasLIB()` is false, as the result
 // would make no sense.
 //
 // WARN: if the segment is broken by some unlinkable blocks, the
@@ -322,12 +362,13 @@ func (f *ForkDB) ReversibleSegment(startBlock bstream.BlockRef) (blocks []*Block
 		}
 
 		reversedBlocks = append(reversedBlocks, &Block{
-			BlockID:  curID,
-			BlockNum: curNum,
-			Object:   f.objects[curID],
+			BlockID:         curID,
+			BlockNum:        curNum,
+			Object:          f.objects[curID],
+			PreviousBlockID: prev, // fixme: check with Matt if this is ok and makes sense??
 		})
 
-		seenIDs[prevID] = true
+		seenIDs[prevID] = true // fixme: shouldn't this be prev instead of prevId??
 		prevID = curID
 		prevNum = curNum
 
@@ -417,21 +458,33 @@ func (f *ForkDB) DeleteLink(id string) {
 	delete(f.nums, id)
 }
 
-func (f *ForkDB) MoveLIB(blockRef bstream.BlockRef) (purgedBlocks []*Block) {
+func (f *ForkDB) MoveLIB(blockRef bstream.BlockRef) {
+	f.libRef = blockRef
+}
+
+func (f *ForkDB) PurgeBeforeLIB(keptBlocks int) (purgedBlocks []*Block, lowestBlock uint64) {
 	f.linksLock.Lock()
 	defer f.linksLock.Unlock()
 
-	newLib := blockRef.Num()
+	cutoff := f.libRef.Num()
+	if cutoff < uint64(keptBlocks) {
+		cutoff = 0
+	} else {
+		cutoff -= uint64(keptBlocks)
+	}
 
 	newLinks := make(map[string]string)
 	newNums := make(map[string]uint64)
 
 	for blk, prev := range f.links {
 		blkNum := f.nums[blk]
-
-		if blkNum >= newLib {
+		if blkNum >= cutoff {
 			newLinks[blk] = prev
 			newNums[blk] = blkNum
+			if lowestBlock == 0 ||
+				blkNum < lowestBlock {
+				lowestBlock = blkNum
+			}
 		} else {
 			purgedBlocks = append(purgedBlocks, &Block{
 				BlockID:         blk,
@@ -446,7 +499,6 @@ func (f *ForkDB) MoveLIB(blockRef bstream.BlockRef) (purgedBlocks []*Block) {
 
 	f.links = newLinks
 	f.nums = newNums
-	f.libRef = blockRef
 
 	return
 }

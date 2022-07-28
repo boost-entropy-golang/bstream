@@ -31,18 +31,48 @@ import (
 	"go.uber.org/zap"
 )
 
+type TestBlockIndexProvider struct {
+	Blocks           []uint64
+	LastIndexedBlock uint64
+	ThrowError       error
+}
+
+func (t *TestBlockIndexProvider) BlocksInRange(lowBlockNum uint64, bundleSize uint64) (out []uint64, err error) {
+	if t.ThrowError != nil {
+		return nil, t.ThrowError
+	}
+	if lowBlockNum > t.LastIndexedBlock {
+		return nil, fmt.Errorf("no indexed file here")
+	}
+
+	for _, blkNum := range t.Blocks {
+		if blkNum >= lowBlockNum && blkNum < (lowBlockNum+bundleSize) {
+			out = append(out, blkNum)
+		}
+	}
+
+	return out, nil
+}
+
 func bRef(id string) BlockRef {
 	return NewBlockRefFromID(id)
 }
 
 type TestSourceFactory struct {
-	Created chan *TestSource
+	Created          chan *TestSource
+	FromBlockNumFunc func(uint64, Handler) Source
+	FromCursorFunc   func(*Cursor, Handler) Source
+	LowestBlkNum     uint64
 }
 
 func NewTestSourceFactory() *TestSourceFactory {
 	return &TestSourceFactory{
 		Created: make(chan *TestSource, 10),
 	}
+}
+
+func (t *TestSourceFactory) LowestBlockNum() uint64 {
+	return t.LowestBlkNum
 }
 
 func (t *TestSourceFactory) NewSource(h Handler) Source {
@@ -58,9 +88,22 @@ func (t *TestSourceFactory) NewSourceFromRef(ref BlockRef, h Handler) Source {
 	return src
 }
 
-func (t *TestSourceFactory) NewSourceFromNum(blockNum uint64, h Handler) Source {
+func (t *TestSourceFactory) SourceFromBlockNum(blockNum uint64, h Handler) Source {
+	if t.FromBlockNumFunc != nil {
+		return t.FromBlockNumFunc(blockNum, h)
+	}
 	src := NewTestSource(h)
 	src.StartBlockNum = blockNum
+	t.Created <- src
+	return src
+}
+
+func (t *TestSourceFactory) SourceFromCursor(cursor *Cursor, h Handler) Source {
+	if t.FromCursorFunc != nil {
+		return t.FromCursorFunc(cursor, h)
+	}
+	src := NewTestSource(h)
+	src.Cursor = cursor
 	t.Created <- src
 	return src
 }
@@ -82,6 +125,7 @@ type TestSource struct {
 	running       chan interface{}
 	StartBlockID  string
 	StartBlockNum uint64
+	Cursor        *Cursor
 }
 
 func (t *TestSource) SetLogger(logger *zap.Logger) {
@@ -94,9 +138,11 @@ func (t *TestSource) Run() {
 }
 
 func (t *TestSource) Push(b *Block, obj interface{}) error {
-	// FIXME: should we handle the error here? and fail the TestSource
-	// if the downstream handler fails?
-	return t.handler.ProcessBlock(b, obj)
+	err := t.handler.ProcessBlock(b, obj)
+	if err != nil {
+		t.Shutdown(err)
+	}
+	return err
 }
 
 var testBlockDateLayout = "2006-01-02T15:04:05.000"
