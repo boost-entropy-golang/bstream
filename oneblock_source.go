@@ -9,6 +9,7 @@ import (
 
 	"github.com/streamingfast/dstore"
 	"github.com/streamingfast/shutter"
+	"go.uber.org/zap"
 )
 
 type oneBlocksSource struct {
@@ -57,8 +58,7 @@ func (s *oneBlocksSource) Run() {
 
 func (s *oneBlocksSource) run() error {
 	for _, file := range s.oneBlockFiles {
-
-		data, err := file.Data(s.ctx, s.downloader)
+		data, err := s.downloader(s.ctx, file)
 		if err != nil {
 			return err
 		}
@@ -78,6 +78,7 @@ func (s *oneBlocksSource) run() error {
 		}
 
 	}
+	zlog.Debug("one_blocks_source finish sending blocks", zap.Int("count", len(s.oneBlockFiles)))
 	return nil
 }
 
