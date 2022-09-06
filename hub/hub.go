@@ -42,7 +42,6 @@ type ForkableHub struct {
 	ready bool
 	Ready chan struct{}
 
-	InitialLiveSourceHeadNum           uint64
 	liveSourceFactory                  bstream.SourceFactory
 	oneBlocksSourceFactory             bstream.SourceFromNumFactory
 	oneBlocksSourceFactoryWithSkipFunc bstream.SourceFromNumFactoryWithSkipFunc
@@ -190,14 +189,13 @@ func (h *ForkableHub) SourceFromCursor(cursor *bstream.Cursor, handler bstream.H
 
 func (h *ForkableHub) bootstrap(blk *bstream.Block) error {
 
-	if h.InitialLiveSourceHeadNum != 0 && blk.Num() < h.InitialLiveSourceHeadNum {
-		// one-block-files may be ahead of that particular source, waiting for higher blocks before we retry
+	// don't try bootstrapping from one-block-files if we are not at HEAD
+	if blk.Num() < h.forkable.HeadNum() {
 		return h.forkable.ProcessBlock(blk, nil)
 	}
 
 	if !h.forkable.Linkable(blk) {
 		startBlock := substractAndRoundDownBlocks(blk.LibNum, uint64(h.keepFinalBlocks))
-		zlog.Info("loading blocks in ForkableHub from one-block-files", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk))
 
 		var oneBlocksSource bstream.Source
 		if h.oneBlocksSourceFactoryWithSkipFunc != nil {
@@ -209,6 +207,11 @@ func (h *ForkableHub) bootstrap(blk *bstream.Block) error {
 			oneBlocksSource = h.oneBlocksSourceFactory(startBlock, h.forkable)
 		}
 
+		if oneBlocksSource == nil {
+			zlog.Debug("no oneBlocksSource from factory, not bootstrapping hub yet")
+			return nil
+		}
+		zlog.Info("bootstrapping ForkableHub from one-block-files", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk))
 		go oneBlocksSource.Run()
 		select {
 		case <-oneBlocksSource.Terminating():
@@ -223,7 +226,12 @@ func (h *ForkableHub) bootstrap(blk *bstream.Block) error {
 	}
 
 	if !h.forkable.Linkable(blk) {
-		zlog.Warn("cannot initialize forkDB on a final block from available one-block-files. Will keep retrying on every block before we become ready")
+		fdb_head := h.forkable.HeadNum()
+		if blk.Num() < fdb_head {
+			zlog.Info("live block not linkable yet, will retry when we reach forkDB's HEAD", zap.Stringer("blk_from_live", blk), zap.Uint64("forkdb_head_num", fdb_head))
+			return nil
+		}
+		zlog.Warn("cannot initialize forkDB from one-block-files (hole between live and one-block-files). Will retry on every incoming live block.", zap.Uint64("forkdb_head_block", fdb_head), zap.Stringer("blk_from_live", blk))
 		return nil
 	}
 	zlog.Info("hub is now Ready")
@@ -240,13 +248,15 @@ func (h *ForkableHub) Run() {
 }
 
 func (h *ForkableHub) reconnect(err error) {
+	failFunc := func() {
+		h.Shutdown(fmt.Errorf("cannot link new blocks to chain after a reconnection"))
+	}
+
 	rh := newReconnectionHandler(
 		h.forkable,
 		h.forkable.HeadNum,
 		time.Minute,
-		func() {
-			h.Shutdown(fmt.Errorf("cannot link new blocks to chain after a reconnection"))
-		},
+		failFunc,
 	)
 
 	zlog.Info("reconnecting hub after disconnection. expecting to reconnect and get blocks linking to headnum within delay",
@@ -255,7 +265,13 @@ func (h *ForkableHub) reconnect(err error) {
 		zap.Error(err))
 
 	liveSource := h.liveSourceFactory(rh)
-	liveSource.OnTerminating(h.reconnect)
+	liveSource.OnTerminating(func(err error) {
+		if rh.success {
+			h.reconnect(err)
+			return
+		}
+		failFunc()
+	})
 	go liveSource.Run()
 }
 
