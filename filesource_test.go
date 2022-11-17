@@ -54,7 +54,41 @@ func base(in int) string {
 	return fmt.Sprintf("%010d", in)
 }
 
-func TestFileSource_Thread(t *testing.T) {
+func TestFileSource_Deadlock(t *testing.T) {
+	bs := dstore.NewMockStore(nil)
+	bs.SetFile(base(0), testBlocks(
+		1, "1a", "", 0,
+		2, "2a", "", 0,
+		3, "3a", "", 0,
+		4, "4a", "", 0,
+	))
+
+	lastProcessed := 0
+	handler := HandlerFunc(func(blk *Block, obj interface{}) error {
+		if blk.Number == 3 {
+			return errDone
+		}
+		lastProcessed = int(blk.Number)
+		return nil
+	})
+
+	fs := NewFileSource(bs, 1, handler, zlog)
+
+	testDone := make(chan struct{})
+	go func() {
+		fs.Run()
+		close(testDone)
+	}()
+	select {
+	case <-testDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Test timeout")
+	}
+
+	assert.Equal(t, 2, lastProcessed)
+}
+
+func TestFileSource_Race(t *testing.T) {
 	bs := dstore.NewMockStore(nil)
 	bs.SetFile(base(0), testBlocks(
 		1, "1a", "", 0,
@@ -126,18 +160,7 @@ func TestFileSource_Run(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Error("Test timeout")
 	}
-	go fs.Shutdown(nil)
-
-	shutDownDone := make(chan struct{})
-	fs.OnTerminated(func(_ error) {
-		close(shutDownDone)
-	})
-	select {
-	case <-shutDownDone:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("Shutdown timeout")
-	}
-
+	fs.Shutdown(nil)
 }
 
 func TestFileSourceFromCursor(t *testing.T) {
@@ -284,7 +307,6 @@ func TestFileSource_lookupBlockIndex(t *testing.T) {
 				bundleSize:                100,
 				logger:                    zlog,
 				timeBetweenProgressBlocks: progDelay,
-				sinkCompleted:             make(chan struct{}),
 			}
 			baseBlock, blocks, noMoreIndex := fs.lookupBlockIndex(test.in)
 			assert.Equal(t, test.expectNoMoreIndex, noMoreIndex)
