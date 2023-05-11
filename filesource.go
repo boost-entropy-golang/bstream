@@ -270,10 +270,20 @@ func (s *FileSource) Run() {
 	s.Shutdown(s.run())
 }
 
-func (s *FileSource) checkExists(baseBlockNum uint64) (bool, string, error) {
-	baseFilename := fmt.Sprintf("%010d", baseBlockNum)
-	exists, err := s.blocksStore.FileExists(context.Background(), baseFilename)
-	return exists, baseFilename, err
+func (s *FileSource) checkExists(baseBlockNum uint64) (exists bool, baseFilename string, err error) {
+	baseFilename = fmt.Sprintf("%010d", baseBlockNum)
+	timeout := time.Second
+	for i := 1; i <= 5; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		exists, err = s.blocksStore.FileExists(ctx, baseFilename)
+		cancel()
+		if err != nil {
+			timeout += time.Duration(i)
+			continue
+		}
+		break
+	}
+	return
 }
 
 func (s *FileSource) run() (err error) {
@@ -575,10 +585,11 @@ func (s *FileSource) launchReader() {
 			baseBlockNum = nextBase
 		}
 
+		now := time.Now()
 		exists, baseFilename, err := s.checkExists(baseBlockNum)
 		if err != nil {
 			s.logger.Warn("storage returned an error reading blocks file", zap.Error(err))
-			s.Shutdown(fmt.Errorf("reading file existence: storage error"))
+			s.Shutdown(fmt.Errorf("filesource reading file existence: %w, since %s", err, time.Since(now)))
 			return
 		}
 
