@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/streamingfast/dstore"
 	"go.uber.org/zap"
 )
@@ -13,7 +15,7 @@ func FetchBlockFromOneBlockStore(
 	num uint64,
 	id string,
 	store dstore.Store,
-) (*Block, error) {
+) (*pbbstream.Block, error) {
 	if obfs, err := listOneBlocks(ctx, num, num+1, store); err == nil {
 		canonicalID := NormalizeBlockID(id)
 		for _, obf := range obfs {
@@ -33,9 +35,9 @@ func FetchBlockFromMergedBlocksStore(
 	ctx context.Context,
 	num uint64,
 	store dstore.Store,
-) (*Block, error) {
-	var foundBlock *Block
-	h := HandlerFunc(func(blk *Block, _ interface{}) error {
+) (*pbbstream.Block, error) {
+	var foundBlock *pbbstream.Block
+	h := HandlerFunc(func(blk *pbbstream.Block, _ interface{}) error {
 		if blk.Number < num {
 			return nil
 		}

@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/streamingfast/dstore"
 	"github.com/streamingfast/shutter"
 	"go.uber.org/zap"
@@ -34,8 +36,6 @@ type FileSource struct {
 
 	// blocksStore is where we access the blocks archives.
 	blocksStore dstore.Store
-	// blockReaderFactory creates a new `BlockReader` from an `io.Reader` instance
-	blockReaderFactory BlockReaderFactory
 
 	startBlockNum uint64
 	stopBlockNum  uint64
@@ -228,14 +228,6 @@ func NewFileSourceThroughCursor(
 
 }
 
-func fileSourceBundleSizeFromOptions(options []FileSourceOption) uint64 {
-	dummyFileSource := NewFileSource(nil, 0, nil, nil, options...)
-	for _, opt := range options {
-		opt(dummyFileSource)
-	}
-	return dummyFileSource.bundleSize
-}
-
 func NewFileSource(
 	blocksStore dstore.Store,
 	startBlockNum uint64,
@@ -244,13 +236,10 @@ func NewFileSource(
 	options ...FileSourceOption,
 
 ) *FileSource {
-	blockReaderFactory := getBlockReaderFactory()
-
 	s := &FileSource{
 		startBlockNum:             startBlockNum,
 		bundleSize:                100,
 		blocksStore:               blocksStore,
-		blockReaderFactory:        blockReaderFactory,
 		fileStream:                make(chan *incomingBlocksFile, 1),
 		Shutter:                   shutter.New(),
 		retryDelay:                4 * time.Second,
@@ -311,8 +300,8 @@ func (s *FileSource) run() (err error) {
 				}
 
 				if validateBlockOrder {
-					if lastBlockID != "" && preBlock.Block.PreviousId != lastBlockID {
-						return fmt.Errorf("found non-sequential blocks in merged blocks file (%q has previousID %q and does not follow %q). You will have to fix or reprocess %q", preBlock.Block.String(), preBlock.Block.PreviousId, lastBlockID, incomingFile.filename)
+					if lastBlockID != "" && preBlock.Block.ParentId != lastBlockID {
+						return fmt.Errorf("found non-sequential blocks in merged blocks file (%q has previousID %q and does not follow %q). You will have to fix or reprocess %q", preBlock.Block.AsRef().String(), preBlock.Block.ParentId, lastBlockID, incomingFile.filename)
 					}
 					lastBlockID = preBlock.Block.Id
 				}
@@ -327,17 +316,6 @@ func (s *FileSource) run() (err error) {
 		}
 	}
 
-}
-
-func unique(s []uint64) (result []uint64) {
-	inResult := make(map[uint64]bool)
-	for _, i := range s {
-		if _, ok := inResult[i]; !ok {
-			inResult[i] = true
-			result = append(result, i)
-		}
-	}
-	return result
 }
 
 func (s *FileSource) tweakRangeIndexResults(baseBlock uint64, inBlocks []uint64) []uint64 {
@@ -417,7 +395,7 @@ func (s *FileSource) lookupBlockIndex(in uint64) (baseBlock uint64, outBlocks []
 	}
 }
 
-func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead BlockRef, incomingBlockFile *incomingBlocksFile) (err error) {
+func (s *FileSource) streamReader(blockReader *DBinBlockReader, prevLastBlockRead BlockRef, incomingBlockFile *incomingBlocksFile) (err error) {
 	var previousLastBlockPassed bool
 	if prevLastBlockRead == nil {
 		previousLastBlockPassed = true
@@ -461,27 +439,27 @@ func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead Blo
 			return
 		}
 
-		var blk *Block
+		var blk *pbbstream.Block
 		blk, err = blockReader.Read()
 		if err != nil && err != io.EOF {
 			close(preprocessed)
 			return err
 		}
 
-		if err == io.EOF && (blk == nil || blk.Num() == 0) {
+		if err == io.EOF && (blk == nil || blk.Number == 0) {
 			close(preprocessed)
 			break
 		}
+		blockNum := blk.Number
 
-		blockNum := blk.Num()
 		// historically, we were saving the last block of the previous bundle in here. We don't do it anymore but we will skip such blocks.
 		if blockNum < s.startBlockNum {
 			continue
 		}
 
 		if validateBlockOrder {
-			if lastBlockID != "" && blk.PreviousId != lastBlockID {
-				return fmt.Errorf("found non-sequential blocks in merged blocks file (%q has previousID %q and does not follow %q). You will have to fix or reprocess %q", blk.String(), blk.PreviousId, lastBlockID, incomingBlockFile.filename)
+			if lastBlockID != "" && blk.ParentId != lastBlockID {
+				return fmt.Errorf("found non-sequential blocks in merged blocks file (%q has previousID %q and does not follow %q). You will have to fix or reprocess %q", blk.AsRef().String(), blk.ParentId, lastBlockID, incomingBlockFile.filename)
 			}
 			lastBlockID = blk.Id
 		}
@@ -496,8 +474,8 @@ func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead Blo
 		}
 
 		if !previousLastBlockPassed {
-			s.logger.Debug("skipping because this is not the first attempt and we have not seen prevLastBlockRead yet", zap.Stringer("block", blk), zap.Stringer("prev_last_block_read", prevLastBlockRead))
-			if prevLastBlockRead.ID() == blk.ID() {
+			s.logger.Debug("skipping because this is not the first attempt and we have not seen prevLastBlockRead yet", zap.Stringer("block", blk.AsRef()), zap.Stringer("prev_last_block_read", prevLastBlockRead))
+			if prevLastBlockRead.ID() == blk.Id {
 				previousLastBlockPassed = true
 			}
 			continue
@@ -523,7 +501,7 @@ func (s *FileSource) streamReader(blockReader BlockReader, prevLastBlockRead Blo
 	return nil
 }
 
-func (s *FileSource) preprocess(block *Block, out chan *PreprocessedBlock) {
+func (s *FileSource) preprocess(block *pbbstream.Block, out chan *PreprocessedBlock) {
 	var obj interface{}
 	var err error
 	if s.preprocFunc != nil {
@@ -542,7 +520,6 @@ func (s *FileSource) preprocess(block *Block, out chan *PreprocessedBlock) {
 			HeadBlock: block.AsRef(),
 		}}
 
-	zlog.Debug("block pre processed", zap.Stringer("block_ref", block))
 	select {
 	case <-s.Terminating():
 		return
@@ -561,9 +538,14 @@ func (s *FileSource) streamIncomingFile(newIncomingFile *incomingBlocksFile, blo
 	if err != nil {
 		return fmt.Errorf("fetching %s from block store: %w", newIncomingFile.filename, err)
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			s.logger.Error("unable to close reader", zap.Error(err))
+		}
+	}()
 
-	blockReader, err := s.blockReaderFactory.New(reader)
+	//blockReader, err := s.blockReaderFactory.New(reader)
+	blockReader, err := NewDBinBlockReader(reader)
 	if err != nil {
 		return fmt.Errorf("unable to create block reader: %w", err)
 	}

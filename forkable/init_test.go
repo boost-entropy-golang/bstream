@@ -16,9 +16,13 @@ package forkable
 
 import (
 	"fmt"
+	"testing"
 
 	"github.com/streamingfast/bstream"
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 	"github.com/streamingfast/logging"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -37,15 +41,15 @@ func bRef(id string) bstream.BlockRef {
 	return bstream.NewBlockRef(id, blocknum(id))
 }
 
-func tinyBlk(id string) *bstream.Block {
-	return bstream.TestBlock(id, "")
+func tinyBlk(id string) bstream.BlockRef {
+	return bstream.TestBlock(id, "").AsRef()
 }
 
-func bTestBlock(id, previousID string) *bstream.Block {
+func bTestBlock(id, previousID string) *pbbstream.Block {
 	return bstream.TestBlock(id, previousID)
 }
 
-func tb(id, previousID string, newLIB uint64) *bstream.Block {
+func tb(id, previousID string, newLIB uint64) *pbbstream.Block {
 	if newLIB == 0 {
 		return bstream.TestBlock(id, previousID)
 	}
@@ -66,7 +70,7 @@ func newTestForkableSink(undoErr, newErr error) *testForkableSink {
 	}
 }
 
-func (p *testForkableSink) ProcessBlock(blk *bstream.Block, obj interface{}) error {
+func (p *testForkableSink) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	fao := obj.(*ForkableObject)
 
 	if fao.step == bstream.StepUndo && p.undoErr != nil {
@@ -99,4 +103,37 @@ func fdbLinked(lib string, kv ...string) *ForkDB {
 	}
 
 	return fDB
+}
+
+func assertBlockAndCursors(t *testing.T, expected, actual []*blockAndCursor) {
+	t.Helper()
+
+	require.Equal(t, len(expected), len(actual))
+	for idx, expect := range expected {
+		assertBlockAndCursor(t, expect, actual[idx])
+	}
+}
+
+func assertBlockAndCursor(t *testing.T, expected, actual *blockAndCursor) {
+	t.Helper()
+
+	bstream.AssertCursorEqual(t, expected.cursor, actual.cursor)
+	bstream.AssertProtoEqual(t, expected.block, actual.block)
+}
+
+func assertExpectedBlocks(t *testing.T, expected, actual []expectedBlock) {
+	t.Helper()
+
+	require.Equal(t, len(expected), len(actual))
+	for idx, expect := range expected {
+		assertExpectedBlock(t, expect, actual[idx])
+	}
+}
+
+func assertExpectedBlock(t *testing.T, expected, actual expectedBlock) {
+	t.Helper()
+
+	assert.Equal(t, expected.step, actual.step)
+	assert.Equal(t, expected.cursorLibNum, actual.cursorLibNum)
+	bstream.AssertProtoEqual(t, expected.block, actual.block)
 }

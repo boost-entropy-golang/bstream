@@ -17,12 +17,14 @@ package bstream
 import (
 	"fmt"
 	"sync"
+
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 )
 
 // RecentBlockGetter requires a source that shuts down when ProcessBlock fails
 type RecentBlockGetter struct {
 	counter         int
-	mostRecentBlock *Block
+	mostRecentBlock *pbbstream.Block
 	lock            sync.Mutex
 	sampleSize      int
 }
@@ -33,7 +35,7 @@ func NewRecentBlockGetter(sampleSize int) *RecentBlockGetter {
 	}
 }
 
-func (g *RecentBlockGetter) ProcessBlock(blk *Block, obj interface{}) error {
+func (g *RecentBlockGetter) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	g.lock.Lock()
 	defer g.lock.Unlock()
 
@@ -49,7 +51,7 @@ func (g *RecentBlockGetter) ProcessBlock(blk *Block, obj interface{}) error {
 	return nil
 }
 
-func (g *RecentBlockGetter) LatestBlock() *Block {
+func (g *RecentBlockGetter) LatestBlock() *pbbstream.Block {
 	g.lock.Lock()
 	defer g.lock.Unlock()
 

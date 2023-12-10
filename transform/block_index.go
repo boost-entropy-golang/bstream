@@ -3,12 +3,11 @@ package transform
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"strings"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/golang/protobuf/proto"
-	pbbstream "github.com/streamingfast/pbgo/sf/bstream/v1"
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+	proto "google.golang.org/protobuf/proto"
 )
 
 // blockIndex is a generic index for existence of certain keys at certain block heights
@@ -39,7 +38,7 @@ func NewBlockIndex(lowBlockNum, indexSize uint64) *blockIndex {
 func ReadNewBlockIndex(r io.ReadCloser) (*blockIndex, error) {
 	defer r.Close()
 
-	obj, err := ioutil.ReadAll(r)
+	obj, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read index: %s", err)
 	}

@@ -24,14 +24,16 @@ import (
 	"strings"
 	"sync"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/streamingfast/dstore"
 )
 
 type OneBlockDownloaderFunc = func(ctx context.Context, oneBlockFile *OneBlockFile) (data []byte, err error)
 
-func decodeOneblockfileData(data []byte) (*Block, error) {
+func decodeOneblockfileData(data []byte) (*pbbstream.Block, error) {
 	reader := bytes.NewReader(data)
-	blockReader, err := getBlockReaderFactory().New(reader)
+	blockReader, err := NewDBinBlockReader(reader)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create block reader: %w", err)
 	}
@@ -56,12 +58,12 @@ type OneBlockFile struct {
 	Deleted       bool
 }
 
-func (f *OneBlockFile) ToBstreamBlock() *Block {
-	return &Block{
-		Id:         f.ID,
-		Number:     f.Num,
-		PreviousId: f.PreviousID,
-		LibNum:     f.LibNum,
+func (f *OneBlockFile) ToBstreamBlock() *pbbstream.Block {
+	return &pbbstream.Block{
+		Id:       f.ID,
+		Number:   f.Num,
+		ParentId: f.PreviousID,
+		LibNum:   f.LibNum,
 	}
 }
 
@@ -70,7 +72,7 @@ func (f *OneBlockFile) String() string {
 }
 
 func NewOneBlockFile(fileName string) (*OneBlockFile, error) {
-	_ = &Block{}
+	_ = &pbbstream.Block{}
 	blockNum, blockID, previousBlockID, libNum, canonicalName, err := ParseFilename(fileName)
 	if err != nil {
 		return nil, err
@@ -139,7 +141,7 @@ func ParseFilename(filename string) (blockNum uint64, blockIDSuffix string, prev
 	return
 }
 
-func BlockFileName(block *Block) string {
+func BlockFileName(block *pbbstream.Block) string {
 	return BlockFileNameWithSuffix(block, "generated")
 }
 
@@ -150,11 +152,11 @@ func TruncateBlockID(in string) string {
 	return in[len(in)-16:]
 }
 
-func BlockFileNameWithSuffix(block *Block, suffix string) string {
-	blockID := TruncateBlockID(block.ID())
-	previousID := TruncateBlockID(block.PreviousID())
+func BlockFileNameWithSuffix(block *pbbstream.Block, suffix string) string {
+	blockID := TruncateBlockID(block.Id)
+	previousID := TruncateBlockID(block.ParentId)
 
-	return fmt.Sprintf("%010d-%s-%s-%d-%s", block.Num(), blockID, previousID, block.LibNum, suffix)
+	return fmt.Sprintf("%010d-%s-%s-%d-%s", block.Number, blockID, previousID, block.LibNum, suffix)
 }
 
 func OneBlockDownloaderFromStore(blocksStore dstore.Store) OneBlockDownloaderFunc {

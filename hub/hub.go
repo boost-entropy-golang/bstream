@@ -21,6 +21,7 @@ import (
 
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/bstream/forkable"
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 	"github.com/streamingfast/shutter"
 	"go.uber.org/zap"
 )
@@ -90,7 +91,7 @@ func (h *ForkableHub) LowestBlockNum() uint64 {
 	return 0
 }
 
-func (h *ForkableHub) GetBlock(num uint64, id string) (out *bstream.Block) {
+func (h *ForkableHub) GetBlock(num uint64, id string) (out *pbbstream.Block) {
 	if id == "" {
 		return h.forkable.CanonicalBlockAt(num)
 	}
@@ -130,7 +131,7 @@ func (h *ForkableHub) IsReady() bool {
 	return h.ready
 }
 
-func (h *ForkableHub) bootstrapperHandler(blk *bstream.Block, obj interface{}) error {
+func (h *ForkableHub) bootstrapperHandler(blk *pbbstream.Block, obj interface{}) error {
 	if h.ready {
 		return h.forkable.ProcessBlock(blk, obj)
 	}
@@ -224,10 +225,10 @@ func (h *ForkableHub) SourceThroughCursor(startBlock uint64, cursor *bstream.Cur
 	return
 }
 
-func (h *ForkableHub) bootstrap(blk *bstream.Block) error {
+func (h *ForkableHub) bootstrap(blk *pbbstream.Block) error {
 
 	// don't try bootstrapping from one-block-files if we are not at HEAD
-	if blk.Num() < h.forkable.HeadNum() {
+	if blk.Number < h.forkable.HeadNum() {
 		return h.forkable.ProcessBlock(blk, nil)
 	}
 
@@ -248,7 +249,7 @@ func (h *ForkableHub) bootstrap(blk *bstream.Block) error {
 			zlog.Debug("no oneBlocksSource from factory, not bootstrapping hub yet")
 			return nil
 		}
-		zlog.Info("bootstrapping ForkableHub from one-block-files", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk))
+		zlog.Info("bootstrapping ForkableHub from one-block-files", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk.AsRef()))
 		go oneBlocksSource.Run()
 		select {
 		case <-oneBlocksSource.Terminating():
@@ -264,11 +265,11 @@ func (h *ForkableHub) bootstrap(blk *bstream.Block) error {
 
 	if !h.forkable.Linkable(blk) {
 		fdb_head := h.forkable.HeadNum()
-		if blk.Num() < fdb_head {
-			zlog.Info("live block not linkable yet, will retry when we reach forkDB's HEAD", zap.Stringer("blk_from_live", blk), zap.Uint64("forkdb_head_num", fdb_head))
+		if blk.Number < fdb_head {
+			zlog.Info("live block not linkable yet, will retry when we reach forkDB's HEAD", zap.Stringer("blk_from_live", blk.AsRef()), zap.Uint64("forkdb_head_num", fdb_head))
 			return nil
 		}
-		zlog.Warn("cannot initialize forkDB from one-block-files (hole between live and one-block-files). Will retry on every incoming live block.", zap.Uint64("forkdb_head_block", fdb_head), zap.Stringer("blk_from_live", blk))
+		zlog.Warn("cannot initialize forkDB from one-block-files (hole between live and one-block-files). Will retry on every incoming live block.", zap.Uint64("forkdb_head_block", fdb_head), zap.Stringer("blk_from_live", blk.AsRef()))
 		return nil
 	}
 	zlog.Info("hub is now Ready")
@@ -328,8 +329,8 @@ func substractAndRoundDownBlocks(blknum, sub uint64) uint64 {
 	return out
 }
 
-func (h *ForkableHub) processBlock(blk *bstream.Block, obj interface{}) error {
-	zlog.Debug("process_block", zap.Stringer("blk", blk), zap.Any("obj", obj.(*forkable.ForkableObject).Step()))
+func (h *ForkableHub) processBlock(blk *pbbstream.Block, obj interface{}) error {
+	zlog.Debug("process_block", zap.Stringer("blk", blk.AsRef()), zap.Any("obj", obj.(*forkable.ForkableObject).Step()))
 	preprocBlock := &bstream.PreprocessedBlock{Block: blk, Obj: obj}
 
 	subscribers := h.subscribers // we may remove some from the original slice during the loop
@@ -370,7 +371,7 @@ func newReconnectionHandler(
 	}
 }
 
-func (rh *reconnectionHandler) ProcessBlock(blk *bstream.Block, obj interface{}) error {
+func (rh *reconnectionHandler) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if !rh.success {
 		if rh.start.IsZero() {
 			rh.start = time.Now()

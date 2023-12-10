@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"github.com/streamingfast/bstream"
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 	ggrpcserver "github.com/streamingfast/dgrpc/server"
 	"github.com/streamingfast/logging"
-	pbbstream "github.com/streamingfast/pbgo/sf/bstream/v1"
 	pbheadinfo "github.com/streamingfast/pbgo/sf/headinfo/v1"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -107,13 +107,9 @@ func (s *BlockstreamServer) Blocks(r *pbbstream.BlockRequest, stream pbbstream.B
 
 func streamHandler(stream pbbstream.BlockStream_BlocksServer, logger *zap.Logger) bstream.Handler {
 	return bstream.HandlerFunc(
-		func(blk *bstream.Block, _ interface{}) error {
-			block, err := blk.ToProto()
-			if err != nil {
-				panic(fmt.Errorf("unable to transform from bstream.Block to StreamableBlock: %w", err))
-			}
-			err = stream.Send(block)
-			logger.Debug("block sent to stream", zap.Stringer("block", blk), zap.Error(err))
+		func(blk *pbbstream.Block, _ interface{}) error {
+			err := stream.Send(blk)
+			logger.Debug("block sent to stream", zap.Stringer("block", blk.AsRef()), zap.Error(err))
 			return err
 		})
 }

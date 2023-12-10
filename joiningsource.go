@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"sync"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/streamingfast/shutter"
 	"go.uber.org/zap"
 )
@@ -42,7 +44,7 @@ type JoiningSource struct {
 
 	handler Handler
 
-	lastBlockProcessed *Block
+	lastBlockProcessed *pbbstream.Block
 
 	startBlockNum  uint64 // overriden by cursor if it exists, unless we are in cursorIsTarget mode
 	cursor         *Cursor
@@ -124,7 +126,7 @@ func (s *JoiningSource) tryGetSource(handler Handler, factory ForkableSourceFact
 	return factory.SourceFromBlockNum(s.startBlockNum, handler)
 }
 
-func (s *JoiningSource) fileSourceHandler(blk *Block, obj interface{}) error {
+func (s *JoiningSource) fileSourceHandler(blk *pbbstream.Block, obj interface{}) error {
 	if s.liveSource != nil { // we should be already shutdown anyway
 		return nil
 	}

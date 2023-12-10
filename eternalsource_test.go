@@ -18,13 +18,15 @@ import (
 	"fmt"
 	"testing"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/stretchr/testify/assert"
 )
 
 func TestEternalSource(t *testing.T) {
 	doneCount := 0
-	done := HandlerFunc(func(blk *Block, obj interface{}) error {
-		if blk.ID() == "00000003a" {
+	done := HandlerFunc(func(blk *pbbstream.Block, obj interface{}) error {
+		if blk.Id == "00000003a" {
 			return fmt.Errorf("failing block")
 		}
 		doneCount++
@@ -58,8 +60,8 @@ func TestEternalSource(t *testing.T) {
 
 func TestDelegatingEternalSource(t *testing.T) {
 	doneCount := 0
-	done := HandlerFunc(func(blk *Block, obj interface{}) error {
-		if blk.ID() == "00000003a" {
+	done := HandlerFunc(func(blk *pbbstream.Block, obj interface{}) error {
+		if blk.Id == "00000003a" {
 			return fmt.Errorf("failing block")
 		}
 		doneCount++

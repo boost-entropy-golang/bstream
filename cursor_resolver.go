@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"strings"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 	"github.com/streamingfast/dstore"
 	"go.uber.org/zap"
 )
@@ -45,12 +47,12 @@ func newCursorResolverHandler(
 	}
 }
 
-func (f *cursorResolver) ProcessBlock(blk *Block, obj interface{}) error {
+func (f *cursorResolver) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if f.resolved {
 		return f.handler.ProcessBlock(blk, obj)
 	}
 
-	if f.passThroughCursor && blk.Num() <= f.cursor.LIB.Num() {
+	if f.passThroughCursor && blk.Number <= f.cursor.LIB.Num() {
 		// in passThroughMode, we send everything up to LIB
 		// then we start accumulating until we reach the cursor block
 		return f.handler.ProcessBlock(blk, obj)
@@ -106,13 +108,13 @@ func (f *cursorResolver) ProcessBlock(blk *Block, obj interface{}) error {
 
 }
 
-func (f *cursorResolver) sendUndoBlocks(undoBlocks []*Block, reorgJunctionBlock BlockRef) error {
+func (f *cursorResolver) sendUndoBlocks(undoBlocks []*pbbstream.Block, reorgJunctionBlock BlockRef) error {
 	for _, blk := range undoBlocks {
-		block := blk.AsRef()
+		block := blk
 		obj := &wrappedObject{
 			cursor: &Cursor{
 				Step:      StepUndo,
-				Block:     block,
+				Block:     block.AsRef(),
 				LIB:       f.cursor.LIB,
 				HeadBlock: f.cursor.HeadBlock,
 			},
@@ -157,7 +159,7 @@ func (f *cursorResolver) oneBlocks(ctx context.Context, from, upTo uint64) (out 
 	return
 }
 
-func (f *cursorResolver) download(ctx context.Context, file *OneBlockFile) (*Block, error) {
+func (f *cursorResolver) download(ctx context.Context, file *OneBlockFile) (*pbbstream.Block, error) {
 	data, err := file.Data(ctx, OneBlockDownloaderFromStore(f.forkedBlocksStore))
 	if err != nil {
 		return nil, err
@@ -174,7 +176,7 @@ func (f *cursorResolver) seenIrreversible(id string) *BlockWithObj {
 	return nil
 }
 
-func (f *cursorResolver) resolve(ctx context.Context) (undoBlocks []*Block, reorgJunctionBlock BlockRef, err error) {
+func (f *cursorResolver) resolve(ctx context.Context) (undoBlocks []*pbbstream.Block, reorgJunctionBlock BlockRef, err error) {
 	block := f.cursor.Block
 	lib := f.cursor.LIB
 	step := f.cursor.Step
@@ -186,7 +188,7 @@ func (f *cursorResolver) resolve(ctx context.Context) (undoBlocks []*Block, reor
 
 	for {
 		if blkObj := f.seenIrreversible(previousID); blkObj != nil {
-			reorgJunctionBlock = blkObj.Block
+			reorgJunctionBlock = blkObj.Block.AsRef()
 			break
 		}
 

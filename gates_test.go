@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -29,7 +31,7 @@ func TestRealtimeTripper(t *testing.T) {
 		func() {
 			tripped++
 		},
-		HandlerFunc(func(_ *Block, _ interface{}) error {
+		HandlerFunc(func(_ *pbbstream.Block, _ interface{}) error {
 			handled++
 			return nil
 		}),

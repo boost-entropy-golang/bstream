@@ -17,11 +17,13 @@ package forkable
 import (
 	"fmt"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/streamingfast/bstream"
 	"go.uber.org/zap"
 )
 
-// This gate lets all blocks through once the target blocknum has passed AS IRREVERSIBLE
+// IrreversibleBlockNumGate This gate lets all blocks through once the target blocknum has passed AS IRREVERSIBLE
 type IrreversibleBlockNumGate struct {
 	blockNum uint64
 	handler  bstream.Handler
@@ -51,7 +53,7 @@ func NewIrreversibleBlockNumGate(blockNum uint64, gateType bstream.GateType, h b
 	return g
 }
 
-func (g *IrreversibleBlockNumGate) ProcessBlock(blk *bstream.Block, obj interface{}) error {
+func (g *IrreversibleBlockNumGate) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if g.passed {
 		return g.handler.ProcessBlock(blk, obj)
 	}
@@ -61,9 +63,9 @@ func (g *IrreversibleBlockNumGate) ProcessBlock(blk *bstream.Block, obj interfac
 		return nil
 	}
 
-	g.passed = blk.Num() >= g.blockNum
+	g.passed = blk.Number >= g.blockNum
 
-	if (g.blockNum == 0 || g.blockNum == 1) && blk.Num() == 2 {
+	if (g.blockNum == 0 || g.blockNum == 1) && blk.Number == 2 {
 		g.gateType = bstream.GateInclusive
 		g.passed = true
 	}
@@ -78,7 +80,7 @@ func (g *IrreversibleBlockNumGate) ProcessBlock(blk *bstream.Block, obj interfac
 		return nil
 	}
 
-	g.logger.Info("irreversible block num gate passed", zap.String("gate_type", g.gateType.String()), zap.Uint64("at_block_num", blk.Num()), zap.Uint64("gate_block_num", g.blockNum))
+	g.logger.Info("irreversible block num gate passed", zap.String("gate_type", g.gateType.String()), zap.Uint64("at_block_num", blk.Number), zap.Uint64("gate_block_num", g.blockNum))
 
 	if g.gateType == bstream.GateInclusive {
 		return g.handler.ProcessBlock(blk, obj)
@@ -120,14 +122,14 @@ func NewIrreversibleBlockIDGate(blockID string, gateType bstream.GateType, h bst
 	return g
 }
 
-func (g *IrreversibleBlockIDGate) ProcessBlock(blk *bstream.Block, obj interface{}) error {
+func (g *IrreversibleBlockIDGate) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if g.passed {
 		return g.handler.ProcessBlock(blk, obj)
 	}
 
-	g.passed = blk.ID() == g.blockID
+	g.passed = blk.Id == g.blockID
 
-	if (g.blockID == "" || g.blockID == "0000000000000000000000000000000000000000000000000000000000000000") && blk.Num() == 2 {
+	if (g.blockID == "" || g.blockID == "0000000000000000000000000000000000000000000000000000000000000000") && blk.Number == 2 {
 		g.gateType = bstream.GateInclusive
 		g.passed = true
 	}

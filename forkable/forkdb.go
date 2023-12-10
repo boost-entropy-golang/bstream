@@ -39,7 +39,7 @@ type ForkDB struct {
 	// nums contain block_id -> block_num. For blocks that were not EXPLICITLY added through AddLink
 	// (as the first BlockRef) or added through InitLIB(), the number will not be set.
 	// A missing reference means this is a block ID pointing to a non-LIB, yet Root block that we have
-	// obtains only through it being referenced as a PreviousID in an AddBlock call.
+	// obtains only through it being referenced as a ParentID in an AddBlock call.
 	nums map[string]uint64
 
 	// objects contain objects of whatever nature you want to associate with blocks
@@ -85,7 +85,7 @@ func (f *ForkDB) SetLogger(logger *zap.Logger) {
 }
 
 // Set a new lib without cleaning up blocks older then new lib (NO PURGE)
-func (f *ForkDB) SetLIB(headRef bstream.BlockRef, previousRefID string, libNum uint64) {
+func (f *ForkDB) SetLIB(headRef bstream.BlockRef, libNum uint64) {
 	if headRef.Num() == bstream.GetProtocolFirstStreamableBlock {
 		f.libRef = headRef
 		f.logger.Debug("SetLIB received first streamable block of chain, assuming it's the new LIB", zap.Stringer("lib", f.libRef))
@@ -187,17 +187,19 @@ func (f *ForkDB) Exists(blockID string) bool {
 	return f.links[blockID] != ""
 }
 
-func (f *ForkDB) AddLink(blockRef bstream.BlockRef, previousRefID string, obj interface{}) (exists bool) {
+func (f *ForkDB) AddLink(blockRef bstream.BlockRef, previousRefID string, obj interface{}) (exists bool, seenPrevious bool) {
 	f.linksLock.Lock()
 	defer f.linksLock.Unlock()
 
 	blockID := blockRef.ID()
 	if blockID == previousRefID || blockID == "" {
-		return false
+		return false, false
 	}
 
+	seenPrevious = f.links[previousRefID] != ""
+
 	if f.links[blockID] != "" {
-		return true
+		return true, seenPrevious
 	}
 
 	f.links[blockID] = previousRefID
@@ -210,7 +212,7 @@ func (f *ForkDB) AddLink(blockRef bstream.BlockRef, previousRefID string, obj in
 		f.objects[blockID] = obj
 	}
 
-	return false
+	return false, seenPrevious
 }
 
 // BlockInCurrentChain finds the block_id at height `blockNum` under

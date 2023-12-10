@@ -17,6 +17,8 @@ package bstream
 import (
 	"testing"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,8 +33,8 @@ func TestBufferOperations(t *testing.T) {
 	tests := []struct {
 		name           string
 		operations     func(b *Buffer)
-		expectedBlocks []BlockRef
-		expectedMap    map[string]BlockRef
+		expectedBlocks []*pbbstream.Block
+		expectedMap    map[string]*pbbstream.Block
 	}{
 		{
 			"add a few",
@@ -40,11 +42,11 @@ func TestBufferOperations(t *testing.T) {
 				b.AppendHead(TestBlock("00000002a", "00000001a"))
 				b.AppendHead(TestBlock("00000003a", "00000002a"))
 			},
-			[]BlockRef{
+			[]*pbbstream.Block{
 				TestBlock("00000002a", "00000001a"),
 				TestBlock("00000003a", "00000002a"),
 			},
-			map[string]BlockRef{
+			map[string]*pbbstream.Block{
 				"00000002a": TestBlock("00000002a", "00000001a"),
 				"00000003a": TestBlock("00000003a", "00000002a"),
 			},
@@ -56,10 +58,10 @@ func TestBufferOperations(t *testing.T) {
 				b.AppendHead(TestBlock("00000003a", "00000002a"))
 				b.PopTail()
 			},
-			[]BlockRef{
+			[]*pbbstream.Block{
 				TestBlock("00000003a", "00000002a"),
 			},
-			map[string]BlockRef{
+			map[string]*pbbstream.Block{
 				"00000003a": TestBlock("00000003a", "00000002a"),
 			},
 		},
@@ -71,11 +73,11 @@ func TestBufferOperations(t *testing.T) {
 				b.AppendHead(TestBlock("00000004a", "00000003a"))
 				b.Delete(TestBlock("00000003a", "00000002a"))
 			},
-			[]BlockRef{
+			[]*pbbstream.Block{
 				TestBlock("00000002a", "00000001a"),
 				TestBlock("00000004a", "00000003a"),
 			},
-			map[string]BlockRef{
+			map[string]*pbbstream.Block{
 				"00000002a": TestBlock("00000002a", "00000001a"),
 				"00000004a": TestBlock("00000004a", "00000003a"),
 			},
@@ -89,11 +91,11 @@ func TestBufferOperations(t *testing.T) {
 				b.AppendHead(TestBlock("00000005a", "00000004a"))
 				b.TruncateTail(3)
 			},
-			[]BlockRef{
+			[]*pbbstream.Block{
 				TestBlock("00000004a", "00000003a"),
 				TestBlock("00000005a", "00000004a"),
 			},
-			map[string]BlockRef{
+			map[string]*pbbstream.Block{
 				"00000004a": TestBlock("00000004a", "00000003a"),
 				"00000005a": TestBlock("00000005a", "00000004a"),
 			},
@@ -111,7 +113,7 @@ func TestBufferOperations(t *testing.T) {
 				el, ok := b.elements[id]
 				assert.True(t, ok)
 				if ok {
-					assert.Equal(t, val, el.Value.(BlockRef))
+					assert.Equal(t, val, el.Value)
 				}
 
 			}
@@ -192,7 +194,7 @@ func TestBufferLookups(t *testing.T) {
 			"truncate_tail",
 			func(b *Buffer) {
 				tail := b.TruncateTail(4)
-				assert.Equal(t, []BlockRef{
+				assert.Equal(t, []*pbbstream.Block{
 					TestBlock("00000002a", "00000001a"),
 					TestBlock("00000003a", "00000002a"),
 					TestBlock("00000004a", "00000003a"),
@@ -203,7 +205,7 @@ func TestBufferLookups(t *testing.T) {
 			"head blocks",
 			func(b *Buffer) {
 				head := b.HeadBlocks(4)
-				assert.Equal(t, []BlockRef{
+				assert.Equal(t, []*pbbstream.Block{
 					TestBlock("00000002a", "00000001a"),
 					TestBlock("00000003a", "00000002a"),
 					TestBlock("00000004a", "00000003a"),
@@ -220,48 +222,3 @@ func TestBufferLookups(t *testing.T) {
 		})
 	}
 }
-
-//
-//
-//
-//
-//	b.AppendHead(TestBlock("00000002a", "00000001a"))
-//	assert.Equal(t, 1, b.Len())
-//	assert.Equal(t, "00000002a", b.Tail().ID())
-//	assert.Equal(t, "00000002a", b.Head().ID())
-//
-//	b.AppendHead(TestBlock("00000003a", "00000002a"))
-//	assert.Equal(t, "00000002a", b.Tail().ID())
-//	assert.Equal(t, "00000003a", b.Head().ID())
-//	assert.Equal(t, 2, b.Len())
-//	assert.True(t, b.IsFull())
-//	assert.Equal(t, "00000002a", b.GetByID("00000002a").ID())
-//
-//	blks := b.AllBlocks()
-//	assert.Equal(t, 2, len(blks))
-//	assert.Equal(t, "00000002a", blks[0].ID())
-//	assert.Equal(t, "00000003a", blks[1].ID())
-//
-//	ref := b.PopTail()
-//	assert.Equal(t, "00000002a", ref.ID())
-//
-//	assert.Nil(t, b.GetByID("00000002a"))
-//	assert.Equal(t, "00000003a", b.GetByID("00000003a").ID())
-//
-//	b.AppendHead(TestBlock("00000004a", "00000003a"))
-//	b.AppendHead(TestBlock("00000005a", "00000004a"))
-//
-//	head := b.HeadBlocks(999)
-//	assert.Equal(t, 3, len(head))
-//
-//	head = b.HeadBlocks(2)
-//	assert.Equal(t, 2, len(head))
-//	assert.Equal(t, "00000004a", head[0].ID())
-//	assert.Equal(t, "00000005a", head[1].ID())
-//
-//	truncated := b.TruncateTail(4)
-//	assert.Equal(t, 2, len(truncated))
-//	assert.Equal(t, "00000003a", truncated[0].ID())
-//	assert.Equal(t, "00000004a", truncated[1].ID())
-//	assert.Equal(t, 1, b.Len())
-//}

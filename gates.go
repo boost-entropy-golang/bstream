@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"time"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"go.uber.org/zap"
 )
 
@@ -75,16 +77,16 @@ func NewBlockNumGate(blockNum uint64, gateType GateType, h Handler, opts ...Gate
 	return g
 }
 
-func (g *BlockNumGate) ProcessBlock(blk *Block, obj interface{}) error {
+func (g *BlockNumGate) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if g.passed {
 		return g.handler.ProcessBlock(blk, obj)
 	}
 
-	g.passed = blk.Num() >= g.blockNum
+	g.passed = blk.Number >= g.blockNum
 
 	// ex: ETH: gate could be 0, but FirstStreamable is 1, enable inclusively at 1
 	// ex: EOS: gate could be 0 or 1, but FirstStreamable is 2, enable inclusively at 2
-	if g.blockNum < GetProtocolFirstStreamableBlock && blk.Num() == GetProtocolFirstStreamableBlock {
+	if g.blockNum < GetProtocolFirstStreamableBlock && blk.Number == GetProtocolFirstStreamableBlock {
 		g.gateType = GateInclusive
 		g.passed = true
 	}
@@ -99,7 +101,7 @@ func (g *BlockNumGate) ProcessBlock(blk *Block, obj interface{}) error {
 		return nil
 	}
 
-	g.logger.Info("block num gate passed", zap.String("gate_type", g.gateType.String()), zap.Uint64("at_block_num", blk.Num()), zap.Uint64("gate_block_num", g.blockNum))
+	g.logger.Info("block num gate passed", zap.String("gate_type", g.gateType.String()), zap.Uint64("at_block_num", blk.Number), zap.Uint64("gate_block_num", g.blockNum))
 
 	if g.gateType == GateInclusive {
 		return g.handler.ProcessBlock(blk, obj)
@@ -143,14 +145,14 @@ func (g *BlockIDGate) SetLogger(logger *zap.Logger) {
 	g.logger = logger
 }
 
-func (g *BlockIDGate) ProcessBlock(blk *Block, obj interface{}) error {
+func (g *BlockIDGate) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if g.passed {
 		return g.handler.ProcessBlock(blk, obj)
 	}
 
-	g.passed = blk.ID() == g.blockID
+	g.passed = blk.Id == g.blockID
 
-	if (g.blockID == "" || g.blockID == "0000000000000000000000000000000000000000000000000000000000000000") && blk.Num() == 2 {
+	if (g.blockID == "" || g.blockID == "0000000000000000000000000000000000000000000000000000000000000000") && blk.Number == 2 {
 		g.gateType = GateInclusive
 		g.passed = true
 	}
@@ -198,7 +200,7 @@ func NewRealtimeGate(timeToRealtime time.Duration, h Handler, opts ...GateOption
 	return g
 }
 
-func (g *RealtimeGate) ProcessBlock(blk *Block, obj interface{}) error {
+func (g *RealtimeGate) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if g.passed {
 		return g.handler.ProcessBlock(blk, obj)
 	}
@@ -250,7 +252,7 @@ func NewRealtimeTripper(timeToRealtime time.Duration, tripFunc func(), h Handler
 	return t
 }
 
-func (t *RealtimeTripper) ProcessBlock(blk *Block, obj interface{}) error {
+func (t *RealtimeTripper) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if t.passed {
 		return t.handler.ProcessBlock(blk, obj)
 	}
@@ -268,7 +270,7 @@ func (t *RealtimeTripper) ProcessBlock(blk *Block, obj interface{}) error {
 	// This works well for EOS and ETH, we simply want to print the advancement when more from live source than batch of blocks.
 	// Hence, if last time we seen a block, more than 0.45 elapsed, it's probably a live block.
 	if !t.passed && time.Since(t.lastBlockSeenAt).Seconds() > 0.45 {
-		t.logger.Info("realtime tripper seen block but still not realtime according to tolerance, waiting for realtime block to appear", zap.Stringer("block", blk), zap.Duration("delta", delta), zap.Duration("realtime_tolerance", t.timeToRealtime))
+		t.logger.Info("realtime tripper seen block but still not realtime according to tolerance, waiting for realtime block to appear", zap.Stringer("block", blk.AsRef()), zap.Duration("delta", delta), zap.Duration("realtime_tolerance", t.timeToRealtime))
 	}
 
 	t.lastBlockSeenAt = now
@@ -292,7 +294,7 @@ func NewMinimalBlockNumFilter(blockNum uint64, h Handler) *MinimalBlockNumFilter
 	}
 }
 
-func (f *MinimalBlockNumFilter) ProcessBlock(blk *Block, obj interface{}) error {
+func (f *MinimalBlockNumFilter) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	if blk.Number < f.blockNum {
 		return nil
 	}

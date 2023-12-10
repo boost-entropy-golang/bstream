@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/streamingfast/bstream"
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 	"github.com/streamingfast/bstream/stream"
 	pbfirehose "github.com/streamingfast/pbgo/sf/firehose/v2"
 	"go.uber.org/zap"
@@ -15,7 +16,7 @@ type Transform interface {
 	String() string
 }
 
-type StreamGetter func(ctx context.Context, handler bstream.Handler, request *pbfirehose.Request, decodeBlock bool, logger *zap.Logger) (*stream.Stream, error)
+type StreamGetter func(ctx context.Context, handler bstream.Handler, request *pbfirehose.Request, logger *zap.Logger) (*stream.Stream, error)
 type StreamOutput func(*bstream.Cursor, *anypb.Any) error
 
 type PassthroughTransform interface {
@@ -23,7 +24,7 @@ type PassthroughTransform interface {
 }
 
 type PreprocessTransform interface {
-	Transform(readOnlyBlk *bstream.Block, in Input) (Output, error)
+	Transform(readOnlyBlk *pbbstream.Block, in Input) (Output, error)
 }
 
 type Input interface {

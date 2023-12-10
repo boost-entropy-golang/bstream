@@ -14,10 +14,7 @@
 
 package bstream
 
-type incomingOneBlockFiles struct {
-	filenames []string
-	blocks    chan *PreprocessedBlock
-}
+import pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 
 type incomingBlocksFile struct {
 	baseNum        uint64
@@ -58,16 +55,16 @@ func newIncomingBlocksFile(baseBlockNum uint64, baseFileName string, filteredBlo
 }
 
 type PreprocessedBlock struct {
-	Block *Block
+	Block *pbbstream.Block
 	Obj   interface{}
 }
 
 func (p *PreprocessedBlock) ID() string {
-	return p.Block.ID()
+	return p.Block.Id
 }
 
 func (p *PreprocessedBlock) Num() uint64 {
-	return p.Block.Num()
+	return p.Block.Number
 }
 
 func (p *PreprocessedBlock) String() string {

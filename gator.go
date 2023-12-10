@@ -17,11 +17,13 @@ package bstream
 import (
 	"time"
 
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
+
 	"go.uber.org/zap"
 )
 
 type Gator interface {
-	Pass(block *Block) bool
+	Pass(block *pbbstream.Block) bool
 }
 
 type TimeThresholdGator struct {
@@ -43,12 +45,12 @@ func NewTimeThresholdGator(threshold time.Duration, opts ...GateOption) *TimeThr
 	return g
 }
 
-func (g *TimeThresholdGator) Pass(block *Block) bool {
+func (g *TimeThresholdGator) Pass(block *pbbstream.Block) bool {
 	if g.passed {
 		return true
 	}
 
-	blockTime := block.Time()
+	blockTime := block.Timestamp.AsTime()
 	g.passed = time.Since(blockTime) < g.threshold
 	if g.passed {
 		g.logger.Info("gator passed on blocktime")
@@ -93,12 +95,12 @@ func NewExclusiveBlockNumberGator(blockNum uint64, opts ...GateOption) *BlockNum
 	return g
 }
 
-func (g *BlockNumberGator) Pass(block *Block) bool {
+func (g *BlockNumberGator) Pass(block *pbbstream.Block) bool {
 	if g.passed {
 		return true
 	}
 
-	g.passed = block.Num() >= g.blockNum
+	g.passed = block.Number >= g.blockNum
 	if g.passed {
 		g.logger.Info("gator passed on blocknum", zap.Uint64("block_num", g.blockNum))
 		if g.exclusive {

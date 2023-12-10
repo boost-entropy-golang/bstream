@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/streamingfast/bstream"
+	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -73,13 +74,13 @@ func (r *Registry) BuildFromTransforms(anyTransforms []*anypb.Any) (
 	descriptions := strings.Join(descs, ",")
 
 	var in Input
-	preprocessFunc := func(blk *bstream.Block) (interface{}, error) {
-		clonedBlk := blk.Clone()
+	preprocessFunc := func(blk *pbbstream.Block) (interface{}, error) {
+
 		in = NewNilObj()
 		var out proto.Message
 		var err error
 		for idx, transform := range ppTransforms {
-			if out, err = transform.Transform(clonedBlk, in); err != nil {
+			if out, err = transform.Transform(blk, in); err != nil {
 				return nil, fmt.Errorf("transform %d failed: %w", idx, err)
 			}
 			in = &InputObj{
