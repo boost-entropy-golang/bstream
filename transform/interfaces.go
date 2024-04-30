@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"time"
 
 	"github.com/streamingfast/bstream"
 	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
@@ -17,7 +18,7 @@ type Transform interface {
 }
 
 type StreamGetter func(ctx context.Context, handler bstream.Handler, request *pbfirehose.Request, logger *zap.Logger) (*stream.Stream, error)
-type StreamOutput func(*bstream.Cursor, *anypb.Any) error
+type StreamOutput func(*bstream.Cursor, BlockMetadata, *anypb.Any) error
 
 type PassthroughTransform interface {
 	Run(ctx context.Context, req *pbfirehose.Request, getStream StreamGetter, output StreamOutput) error
@@ -33,6 +34,13 @@ type Input interface {
 }
 
 type Output proto.Message
+
+type BlockMetadata struct {
+	Ref       bstream.BlockRef
+	ParentRef bstream.BlockRef
+	LibNum    uint64
+	Timestamp time.Time
+}
 
 const (
 	NilObjectType string = "nil"

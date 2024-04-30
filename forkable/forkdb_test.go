@@ -317,7 +317,6 @@ func TestChainSwitchSegments(t *testing.T) {
 }
 
 func TestSerializeDeserialize(t *testing.T) {
-
 	tests := []struct {
 		name          string
 		newObject     func(block bstream.BlockRef) any
