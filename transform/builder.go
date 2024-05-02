@@ -11,21 +11,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-// PassthroughFromTransforms returns a PassthroughTransform 'anyTransforms' refers to a single transform of that kind
-func (r *Registry) PassthroughFromTransforms(anyTransforms []*anypb.Any) (PassthroughTransform, error) {
-	if len(anyTransforms) != 1 {
-		return nil, nil
-	}
-	t, err := r.New(anyTransforms[0])
-	if err != nil {
-		return nil, fmt.Errorf("unable to instantiate transform: %w", err)
-	}
-	if pr, ok := t.(PassthroughTransform); ok {
-		return pr, nil
-	}
-	return nil, nil
-}
-
 // BuildFromTransforms returns a PreprocessFunc, an optional BlockIndexProvider, a human-readable description and an error
 // It will fail if it receives a transform of type Passthrough or a transform that does not match any interface
 func (r *Registry) BuildFromTransforms(anyTransforms []*anypb.Any) (
@@ -45,9 +30,6 @@ func (r *Registry) BuildFromTransforms(anyTransforms []*anypb.Any) (
 		t, err := r.New(transform)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("unable to instantiate transform: %w", err)
-		}
-		if _, ok := t.(PassthroughTransform); ok {
-			return nil, nil, "", fmt.Errorf("cannot build preprocessor func from 'Passthrough' type of transform")
 		}
 
 		descs = append(descs, t.String())
