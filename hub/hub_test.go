@@ -2,6 +2,7 @@ package hub
 
 import (
 	"fmt"
+	"github.com/streamingfast/dstore"
 	"io"
 	"testing"
 	"time"
@@ -120,7 +121,11 @@ func TestForkableHub_Bootstrap(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			lsf := bstream.NewTestSourceFactory()
 			obsf := bstream.NewTestSourceFactory()
-			fh := NewForkableHub(lsf.NewSource, bstream.SourceFromNumFactory(obsf.SourceFromBlockNum), test.bufferSize)
+			testOneBlockStore, err := dstore.NewStore("test://test", "zstd", "zstd", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fh := NewForkableHub(lsf.NewSource, test.bufferSize, testOneBlockStore)
 
 			go fh.Run()
 

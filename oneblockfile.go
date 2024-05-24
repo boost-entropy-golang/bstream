@@ -30,7 +30,7 @@ import (
 
 type OneBlockDownloaderFunc = func(ctx context.Context, oneBlockFile *OneBlockFile) (data []byte, err error)
 
-func decodeOneblockfileData(data []byte) (*pbbstream.Block, error) {
+func DecodeOneblockfileData(data []byte) (*pbbstream.Block, error) {
 	reader := bytes.NewReader(data)
 	blockReader, err := NewDBinBlockReader(reader)
 	if err != nil {

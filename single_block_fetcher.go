@@ -25,7 +25,7 @@ func FetchBlockFromOneBlockStore(
 				if err != nil {
 					return nil, err
 				}
-				return decodeOneblockfileData(data)
+				return DecodeOneblockfileData(data)
 			}
 		}
 	}
