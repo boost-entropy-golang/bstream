@@ -66,7 +66,7 @@ func NewForkableHub(liveSourceFactory bstream.SourceFactory, oneBlocksSourceFact
 		panic("invalid oneBlocksSourceFactory interface")
 	}
 
-	hub.forkable = forkable.New(bstream.HandlerFunc(hub.processBlock),
+	hub.forkable = forkable.New(bstream.HandlerFunc(hub.broadcastBlock),
 		forkable.HoldBlocksUntilLIB(),
 		forkable.WithKeptFinalBlocks(keepFinalBlocks),
 	)
@@ -136,13 +136,6 @@ func (h *ForkableHub) MatchSuffix(req string) bool {
 
 func (h *ForkableHub) IsReady() bool {
 	return h.ready
-}
-
-func (h *ForkableHub) bootstrapperHandler(blk *pbbstream.Block, obj interface{}) error {
-	if h.ready {
-		return h.forkable.ProcessBlock(blk, obj)
-	}
-	return h.bootstrap(blk)
 }
 
 // subscribe must be called while hub is locked
@@ -232,67 +225,115 @@ func (h *ForkableHub) SourceThroughCursor(startBlock uint64, cursor *bstream.Cur
 	return
 }
 
-func (h *ForkableHub) bootstrap(blk *pbbstream.Block) error {
-	zlog.Info("bootstrapping ForkableHub", zap.Stringer("blk", blk.AsRef()))
+func (h *ForkableHub) bootstrap() error {
+	//todo: list all the one block available
+	//todo: load those block from the most recent
+	//todo: process each block up to the lib using "h.forkable.ProcessBlock(blk, nil);"
+	//Note: processing the newest block should set the lib on the forkable
+	//todo: when the lib block is reached "h.forkable.Linkable(firstOneBlockProcessed)" should return true and the hub is ready!
+	//todo: if not just return error and relayer  should shutdown
 
-	// don't try bootstrapping from one-block-files if we are not at HEAD
-	if blk.Number < h.forkable.HeadNum() {
-		zlog.Info("skip bootstrapping ForkableHub from one-block-files", zap.Stringer("blk", blk.AsRef()), zap.Uint64("forkdb_head_num", h.forkable.HeadNum()))
-		return h.forkable.ProcessBlock(blk, nil)
-	}
-
-	if !h.forkable.Linkable(blk) {
-		startBlock := substractAndRoundDownBlocks(blk.LibNum, uint64(h.keepFinalBlocks))
-		zlog.Info("bootstrapping on un-linkable block", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk.AsRef()))
-
-		var oneBlocksSource bstream.Source
-		if h.oneBlocksSourceFactoryWithSkipFunc != nil {
-			skipFunc := func(idSuffix string) bool {
-				return h.MatchSuffix(idSuffix)
-			}
-			oneBlocksSource = h.oneBlocksSourceFactoryWithSkipFunc(startBlock, h.forkable, skipFunc)
-		} else {
-			oneBlocksSource = h.oneBlocksSourceFactory(startBlock, h.forkable)
-		}
-
-		if oneBlocksSource == nil {
-			zlog.Debug("no oneBlocksSource from factory, not bootstrapping hub yet")
-			return nil
-		}
-		zlog.Info("bootstrapping ForkableHub from one-block-files", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk.AsRef()))
-		go oneBlocksSource.Run()
-		select {
-		case <-oneBlocksSource.Terminating():
-			break
-		case <-h.Terminating():
-			return h.Err()
-		}
-	}
-
-	if err := h.forkable.ProcessBlock(blk, nil); err != nil {
-		return err
-	}
-
-	if !h.forkable.Linkable(blk) {
-		fdb_head := h.forkable.HeadNum()
-		if blk.Number < fdb_head {
-			zlog.Info("live block not linkable yet, will retry when we reach forkDB's HEAD", zap.Stringer("blk_from_live", blk.AsRef()), zap.Uint64("forkdb_head_num", fdb_head))
-			return nil
-		}
-		zlog.Warn("cannot initialize forkDB from one-block-files (hole between live and one-block-files). Will retry on every incoming live block.", zap.Uint64("forkdb_head_block", fdb_head), zap.Stringer("blk_from_live", blk.AsRef()))
-		return nil
-	}
-	zlog.Info("hub is now Ready")
-
-	h.ready = true
-	close(h.Ready)
 	return nil
+
+	//zlog.Info("bootstrapping ForkableHub", zap.Stringer("blk", blk.AsRef()))
+	//
+	//// don't try bootstrapping from one-block-files if we are not at HEAD
+	//if blk.Number < h.forkable.HeadNum() {
+	//	zlog.Info("skip bootstrapping ForkableHub from one-block-files", zap.Stringer("blk", blk.AsRef()), zap.Uint64("forkdb_head_num", h.forkable.HeadNum()))
+	//	return h.forkable.ProcessBlock(blk, nil)
+	//}
+	//
+	//if !h.forkable.Linkable(blk) {
+	//	startBlock := substractAndRoundDownBlocks(blk.LibNum, uint64(h.keepFinalBlocks))
+	//	zlog.Info("bootstrapping on un-linkable block", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk.AsRef()))
+	//
+	//	var oneBlocksSource bstream.Source
+	//	if h.oneBlocksSourceFactoryWithSkipFunc != nil {
+	//		skipFunc := func(idSuffix string) bool {
+	//			return h.MatchSuffix(idSuffix)
+	//		}
+	//		oneBlocksSource = h.oneBlocksSourceFactoryWithSkipFunc(startBlock, h.forkable, skipFunc)
+	//	} else {
+	//		oneBlocksSource = h.oneBlocksSourceFactory(startBlock, h.forkable)
+	//	}
+	//
+	//	if oneBlocksSource == nil {
+	//		zlog.Debug("no oneBlocksSource from factory, not bootstrapping hub yet")
+	//		return nil
+	//	}
+	//	zlog.Info("bootstrapping ForkableHub from one-block-files", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk.AsRef()))
+	//	go oneBlocksSource.Run()
+	//	select {
+	//	case <-oneBlocksSource.Terminating():
+	//		break
+	//	case <-h.Terminating():
+	//		return h.Err()
+	//	}
+	//}
+	//
+	//if err := h.forkable.ProcessBlock(blk, nil); err != nil {
+	//	return err
+	//}
+	//
+	//if !h.forkable.Linkable(blk) {
+	//	fdb_head := h.forkable.HeadNum()
+	//	if blk.Number < fdb_head {
+	//		zlog.Info("live block not linkable yet, will retry when we reach forkDB's HEAD", zap.Stringer("blk_from_live", blk.AsRef()), zap.Uint64("forkdb_head_num", fdb_head))
+	//		return nil
+	//	}
+	//	zlog.Warn("cannot initialize forkDB from one-block-files (hole between live and one-block-files). Will retry on every incoming live block.", zap.Uint64("forkdb_head_block", fdb_head), zap.Stringer("blk_from_live", blk.AsRef()))
+	//	return nil
+	//}
+	//zlog.Info("hub is now Ready")
+	//
+	//h.ready = true
+	//close(h.Ready)
+	//return nil
 }
 
 func (h *ForkableHub) Run() {
-	liveSource := h.liveSourceFactory(bstream.HandlerFunc(h.bootstrapperHandler))
+	liveSource := h.liveSourceFactory(h)
 	liveSource.OnTerminating(h.reconnect)
+	err := h.bootstrap()
+	if err != nil {
+		h.Shutdown(err)
+		return
+	}
 	liveSource.Run()
+}
+
+func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
+	if h.ready {
+		//todo: before processing the current block, check if the block is linkable "if !h.forkable.Linkable(blk) {"
+		//todo: if not, list all the one block available up to the lib of the current block
+		//todo: check if the block is already known by the forkable "h.Forkable.GetBlockByHash(blk.Id)"
+		//todo: if not, process the block "h.forkable.ProcessBlock(blk, obj)"
+
+		//todo: @stepd. Think we may have a race here where the parent block is always uploaded after we receive the next block through the live source
+		//todo: @stepd: That mean the end user will always be behind by one block. (This is a edge case, but still a bug)
+
+		return h.forkable.ProcessBlock(blk, obj)
+	}
+
+	return nil
+}
+
+// Notes: that function is called by the forkable when a block is processed
+func (h *ForkableHub) broadcastBlock(blk *pbbstream.Block, obj interface{}) error {
+	zlog.Debug("process_block", zap.Stringer("blk", blk.AsRef()), zap.Any("obj", obj.(*forkable.ForkableObject).Step()))
+	preprocBlock := &bstream.PreprocessedBlock{Block: blk, Obj: obj}
+
+	subscribers := h.subscribers // we may remove some from the original slice during the loop
+
+	for _, sub := range subscribers {
+		err := sub.push(preprocBlock)
+		if err != nil {
+			h.unsubscribe(sub)
+			sub.Shutdown(err)
+		}
+
+	}
+	return nil
 }
 
 func (h *ForkableHub) reconnect(err error) {
@@ -337,23 +378,6 @@ func substractAndRoundDownBlocks(blknum, sub uint64) uint64 {
 	}
 
 	return out
-}
-
-func (h *ForkableHub) processBlock(blk *pbbstream.Block, obj interface{}) error {
-	zlog.Debug("process_block", zap.Stringer("blk", blk.AsRef()), zap.Any("obj", obj.(*forkable.ForkableObject).Step()))
-	preprocBlock := &bstream.PreprocessedBlock{Block: blk, Obj: obj}
-
-	subscribers := h.subscribers // we may remove some from the original slice during the loop
-
-	for _, sub := range subscribers {
-		err := sub.push(preprocBlock)
-		if err != nil {
-			h.unsubscribe(sub)
-			sub.Shutdown(err)
-		}
-
-	}
-	return nil
 }
 
 type reconnectionHandler struct {

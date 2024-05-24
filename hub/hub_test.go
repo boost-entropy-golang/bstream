@@ -280,7 +280,7 @@ func TestForkableHub_SourceFromBlockNum(t *testing.T) {
 			fh := &ForkableHub{
 				Shutter: shutter.New(),
 			}
-			fh.forkable = forkable.New(bstream.HandlerFunc(fh.processBlock),
+			fh.forkable = forkable.New(bstream.HandlerFunc(fh.broadcastBlock),
 				forkable.HoldBlocksUntilLIB(),
 				forkable.WithKeptFinalBlocks(100),
 			)
@@ -544,7 +544,7 @@ func TestForkableHub_SourceFromCursor(t *testing.T) {
 			fh := &ForkableHub{
 				Shutter: shutter.New(),
 			}
-			fh.forkable = forkable.New(bstream.HandlerFunc(fh.processBlock),
+			fh.forkable = forkable.New(bstream.HandlerFunc(fh.broadcastBlock),
 				forkable.HoldBlocksUntilLIB(),
 				forkable.WithKeptFinalBlocks(100),
 			)
@@ -855,7 +855,7 @@ func TestForkableHub_SourceThroughCursor(t *testing.T) {
 			fh := &ForkableHub{
 				Shutter: shutter.New(),
 			}
-			fh.forkable = forkable.New(bstream.HandlerFunc(fh.processBlock),
+			fh.forkable = forkable.New(bstream.HandlerFunc(fh.broadcastBlock),
 				forkable.HoldBlocksUntilLIB(),
 				forkable.WithKeptFinalBlocks(100),
 			)
