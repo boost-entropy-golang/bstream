@@ -1,2 +1,2 @@
-generate.sh - Mon May 27 23:16:41 EDT 2024 - maoueh
-streamingfast/proto revision: d05d5d5d6c932d01083f1f89d0ecf56de0babeb5
+generate.sh - Tue May 28 00:03:09 EDT 2024 - maoueh
+streamingfast/proto revision: e5546596759bb0f10598eafe8306e960999303ab

@@ -27,20 +27,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-type oneBlockRecorder struct {
-	*testing.T
-	blocks []*pbtest.Block
-}
-
-func (r *oneBlockRecorder) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
-	block := &pbtest.Block{}
-	err := anypb.UnmarshalTo(blk.Payload, block, proto.UnmarshalOptions{})
-	require.NoError(r.T, err)
-
-	r.blocks = append(r.blocks, block)
-	return nil
-}
-
 func TestOneBlocksSource(t *testing.T) {
 	store := dstore.NewMockStore(nil)
 	addToMockStore(t, store,
@@ -53,7 +39,7 @@ func TestOneBlocksSource(t *testing.T) {
 	)
 
 	recorder := &oneBlockRecorder{T: t}
-	source, err := NewOneBlocksSource(1, store, recorder, OneBlocksSourceLogger(zlogTest))
+	source, err := NewOneBlocksSource(0, store, recorder, OneBlocksSourceLogger(zlogTest))
 	require.NoError(t, err)
 
 	err = source.run()
@@ -115,14 +101,13 @@ func TestOneBlocksSource_SkipperFuncSet(t *testing.T) {
 	require.Equal(t, "1a", recorder.blocks[0].Id)
 	require.Equal(t, "2a", recorder.blocks[1].Id)
 	require.Equal(t, "3a", recorder.blocks[2].Id)
-
 }
 
 func addToMockStore(t *testing.T, store *dstore.MockStore, blocks ...*pbtest.Block) {
 	t.Helper()
 
 	for _, block := range blocks {
-		buffer := bytes.NewBuffer([]byte{})
+		buffer := bytes.NewBuffer(nil)
 		blockWriter, err := NewDBinBlockWriter(buffer)
 		require.NoError(t, err)
 
@@ -133,4 +118,18 @@ func addToMockStore(t *testing.T, store *dstore.MockStore, blocks ...*pbtest.Blo
 
 		store.SetFile(BlockFileName(pbbstreamBlock), buffer.Bytes())
 	}
+}
+
+type oneBlockRecorder struct {
+	*testing.T
+	blocks []*pbtest.Block
+}
+
+func (r *oneBlockRecorder) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
+	block := &pbtest.Block{}
+	err := anypb.UnmarshalTo(blk.Payload, block, proto.UnmarshalOptions{})
+	require.NoError(r.T, err)
+
+	r.blocks = append(r.blocks, block)
+	return nil
 }
