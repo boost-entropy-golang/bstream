@@ -16,6 +16,7 @@ package bstream
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	pbtest "github.com/streamingfast/bstream/internal/pb/sf/bstream/test/v1"
@@ -65,6 +66,56 @@ func TestOneBlocksSource(t *testing.T) {
 	require.Equal(t, "3a_b", recorder.blocks[3].Id)
 	require.Equal(t, "4b", recorder.blocks[4].Id)
 	require.Equal(t, "5b", recorder.blocks[5].Id)
+}
+
+func TestOneBlocksSource_LowestNumSet(t *testing.T) {
+	store := dstore.NewMockStore(nil)
+	addToMockStore(t, store,
+		&pbtest.Block{Id: "1a"},
+		&pbtest.Block{Id: "2a"},
+		&pbtest.Block{Id: "3a"},
+		&pbtest.Block{Id: "3a_b"},
+		&pbtest.Block{Id: "4b"},
+		&pbtest.Block{Id: "5b"},
+	)
+
+	recorder := &oneBlockRecorder{T: t}
+	source, err := NewOneBlocksSource(4, store, recorder, OneBlocksSourceLogger(zlogTest))
+	require.NoError(t, err)
+
+	err = source.run()
+	require.NoError(t, err)
+
+	require.Len(t, recorder.blocks, 2)
+	require.Equal(t, "4b", recorder.blocks[0].Id)
+	require.Equal(t, "5b", recorder.blocks[1].Id)
+}
+
+func TestOneBlocksSource_SkipperFuncSet(t *testing.T) {
+	store := dstore.NewMockStore(nil)
+	addToMockStore(t, store,
+		&pbtest.Block{Id: "1a"},
+		&pbtest.Block{Id: "2a"},
+		&pbtest.Block{Id: "3a_b"},
+		&pbtest.Block{Id: "3a"},
+		&pbtest.Block{Id: "4b"},
+		&pbtest.Block{Id: "5b"},
+	)
+
+	recorder := &oneBlockRecorder{T: t}
+	source, err := NewOneBlocksSource(1, store, recorder, OneBlocksSourceLogger(zlogTest), OneBlocksSourceWithSkipperFunc(func(blockID string) bool {
+		return strings.HasSuffix(blockID, "b")
+	}))
+	require.NoError(t, err)
+
+	err = source.run()
+	require.NoError(t, err)
+
+	require.Len(t, recorder.blocks, 3)
+	require.Equal(t, "1a", recorder.blocks[0].Id)
+	require.Equal(t, "2a", recorder.blocks[1].Id)
+	require.Equal(t, "3a", recorder.blocks[2].Id)
+
 }
 
 func addToMockStore(t *testing.T, store *dstore.MockStore, blocks ...*pbtest.Block) {

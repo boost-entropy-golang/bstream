@@ -65,7 +65,8 @@ func (b *Block) splitID() (number uint64, forkLine string, parentLine string) {
 	forkLine = matches[2]
 	parentLine = forkLine
 	if matches[3] != "" {
-		parentLine = strings.TrimPrefix(matches[3], "_")
+		parentLine = forkLine
+		forkLine = strings.TrimPrefix(matches[3], "_")
 	}
 
 	return
