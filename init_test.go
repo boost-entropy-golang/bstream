@@ -15,15 +15,11 @@
 package bstream
 
 import (
-	"os"
-
 	"github.com/streamingfast/logging"
-	"go.uber.org/zap"
 )
 
+var zlogTest, _ = logging.PackageLogger("test", "github.com/streamingfast/bstream_test")
+
 func init() {
-	if os.Getenv("DEBUG") != "" {
-		logger := logging.MustCreateLoggerWithLevel("test", zap.NewAtomicLevelAt(zap.DebugLevel))
-		logging.Override(logger)
-	}
+	logging.InstantiateLoggers()
 }

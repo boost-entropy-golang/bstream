@@ -19,9 +19,17 @@ type oneBlocksSource struct {
 	handler       Handler
 	ctx           context.Context
 	skipperFunc   func(idSuffix string) bool
+	logger        *zap.Logger
 }
 
 type OneBlocksSourceOption func(*oneBlocksSource)
+
+// OneBlocksSourceLogger configures the logger to use on the one block source
+func OneBlocksSourceLogger(logger *zap.Logger) OneBlocksSourceOption {
+	return func(s *oneBlocksSource) {
+		s.logger = logger
+	}
+}
 
 // OneBlocksSourceWithSkipperFunc allows a lookup function to prevent downloading the same file over and over
 func OneBlocksSourceWithSkipperFunc(f func(string) bool) OneBlocksSourceOption {
@@ -41,19 +49,13 @@ func NewOneBlocksSource(
 	listCtx, cancel := context.WithTimeout(ctx, time.Second*30)
 	defer cancel()
 
-	files, err := listOneBlocks(listCtx, lowestBlockNum, 0, store)
-	if err != nil {
-		zlog.Warn("error listing oneblocks", zap.Uint64("lowest_block_num", lowestBlockNum), zap.Error(err))
-		return nil, err
-	}
-
 	sourceCtx, cancel := context.WithCancel(ctx)
 
 	src := &oneBlocksSource{
-		oneBlockFiles: files,
-		downloader:    OneBlockDownloaderFromStore(store),
-		handler:       handler,
-		ctx:           sourceCtx,
+		downloader: OneBlockDownloaderFromStore(store),
+		handler:    handler,
+		ctx:        sourceCtx,
+		logger:     zlog,
 		Shutter: shutter.New(
 			shutter.RegisterOnTerminating(func(_ error) {
 				cancel()
@@ -64,6 +66,13 @@ func NewOneBlocksSource(
 		opt(src)
 	}
 
+	var err error
+	src.oneBlockFiles, err = listOneBlocks(listCtx, lowestBlockNum, 0, store)
+	if err != nil {
+		src.logger.Warn("error listing oneblocks", zap.Uint64("lowest_block_num", lowestBlockNum), zap.Error(err))
+		return nil, err
+	}
+
 	return src, nil
 }
 
@@ -72,6 +81,8 @@ func (s *oneBlocksSource) Run() {
 }
 
 func (s *oneBlocksSource) run() error {
+	s.logger.Debug("running one blocks source", zap.Int("count", len(s.oneBlockFiles)))
+
 	for _, file := range s.oneBlockFiles {
 		if s.skipperFunc != nil && s.skipperFunc(file.ID) {
 			continue

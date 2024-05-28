@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,7 +179,7 @@ func OneBlockDownloaderFromStore(blocksStore dstore.Store) OneBlockDownloaderFun
 			}
 			defer reader.Close()
 
-			return ioutil.ReadAll(reader)
+			return io.ReadAll(reader)
 		}
 		return nil, fmt.Errorf("no filename for this oneBlockFile")
 	}
