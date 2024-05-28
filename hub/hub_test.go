@@ -3,7 +3,6 @@ package hub
 import (
 	"fmt"
 	"github.com/streamingfast/dstore"
-	"io"
 	"testing"
 	"time"
 
@@ -17,157 +16,100 @@ import (
 
 func TestForkableHub_Bootstrap(t *testing.T) {
 	tests := []struct {
-		name                       string
-		liveBlocks                 []*pbbstream.Block
-		oneBlocksPasses            [][]*pbbstream.Block
-		bufferSize                 int
-		expectStartNum             uint64
-		expectReady                bool
-		expectReadyAfter           bool
-		expectBlocksInCurrentChain []uint64
+		name                   string
+		oneBlocksAvailable     []*pbbstream.Block
+		bufferSize             int
+		expectReady            bool
+		expectedError          error
+		expectedForkableLibNum *pbbstream.Block
 	}{
 		{
-			name: "vanilla",
-			liveBlocks: []*pbbstream.Block{
-				bstream.TestBlockWithLIBNum("00000009", "00000008", 3),
-				bstream.TestBlockWithLIBNum("0000000a", "00000009", 4),
-			},
-			oneBlocksPasses: [][]*pbbstream.Block{{
+			name: "sunny path",
+			oneBlocksAvailable: []*pbbstream.Block{
 				bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
 				bstream.TestBlockWithLIBNum("00000004", "00000003", 2),
 				bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
 				bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
-			}},
-			bufferSize:                 0,
-			expectStartNum:             0,
-			expectReady:                true,
-			expectReadyAfter:           true,
-			expectBlocksInCurrentChain: []uint64{4, 5, 8, 9, 10},
-		},
-		{
-			name: "LIB met on second live block",
-			liveBlocks: []*pbbstream.Block{
 				bstream.TestBlockWithLIBNum("00000009", "00000008", 3),
-				bstream.TestBlockWithLIBNum("0000000a", "00000009", 5),
 			},
-			oneBlocksPasses: [][]*pbbstream.Block{
-				{
-					bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
-					bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
-				},
-				{
-					bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
-					bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
-				},
-			},
-			bufferSize:                 0,
-			expectStartNum:             0,
-			expectReady:                false,
-			expectReadyAfter:           true,
-			expectBlocksInCurrentChain: []uint64{5, 8, 9, 10},
-		},
-		{
-			name: "cannot join one-block-files",
-			liveBlocks: []*pbbstream.Block{
-				bstream.TestBlockWithLIBNum("00000009", "00000008", 3),
-				bstream.TestBlockWithLIBNum("0000000a", "00000009", 4),
-			},
-			oneBlocksPasses: [][]*pbbstream.Block{
-				{
-					bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
-					bstream.TestBlockWithLIBNum("00000004", "00000003", 3),
-					bstream.TestBlockWithLIBNum("00000005", "00000004", 3),
-				},
-				{
-					bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
-					bstream.TestBlockWithLIBNum("00000004", "00000003", 3),
-					bstream.TestBlockWithLIBNum("00000005", "00000004", 3),
-				},
-			},
-			bufferSize:       0,
-			expectStartNum:   0,
-			expectReady:      false,
-			expectReadyAfter: false,
+
+			bufferSize:             0,
+			expectReady:            true,
+			expectedError:          nil,
+			expectedForkableLibNum: bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
 		},
 
 		{
-			name: "one-block-file joined eventually",
-			liveBlocks: []*pbbstream.Block{
-				bstream.TestBlockWithLIBNum("00000008", "00000007", 3),
+			name: "one block store with random one block files",
+			oneBlocksAvailable: []*pbbstream.Block{
+				bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
+				bstream.TestBlockWithLIBNum("00000004", "00000003", 2),
+				bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
+				bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
 				bstream.TestBlockWithLIBNum("00000009", "00000008", 3),
+				bstream.TestBlockWithLIBNum("00000120", "00000119", 288),
+				bstream.TestBlockWithLIBNum("00000121", "00000120", 288),
+				bstream.TestBlockWithLIBNum("00000122", "00000121", 288),
+				bstream.TestBlockWithLIBNum("00000123", "00000122", 290),
+				bstream.TestBlockWithLIBNum("00000124", "00000123", 290),
 			},
-			oneBlocksPasses: [][]*pbbstream.Block{
-				{
-					bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
-					bstream.TestBlockWithLIBNum("00000004", "00000003", 3),
-					bstream.TestBlockWithLIBNum("00000006", "00000004", 3),
-				},
-				{
-					bstream.TestBlockWithLIBNum("00000003", "00000002", 3),
-					bstream.TestBlockWithLIBNum("00000004", "00000003", 3),
-					bstream.TestBlockWithLIBNum("00000006", "00000004", 3),
-					bstream.TestBlockWithLIBNum("00000007", "00000006", 3),
-				},
+
+			bufferSize:             0,
+			expectReady:            true,
+			expectedError:          nil,
+			expectedForkableLibNum: bstream.TestBlockWithLIBNum("00000122", "00000121", 288),
+		},
+
+		{
+			name:               "no one block files",
+			oneBlocksAvailable: []*pbbstream.Block{},
+
+			bufferSize:             0,
+			expectReady:            false,
+			expectedError:          fmt.Errorf("no one blocks found"),
+			expectedForkableLibNum: nil,
+		},
+		{
+			name: "most recent block not linkable",
+			oneBlocksAvailable: []*pbbstream.Block{
+				bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
+				bstream.TestBlockWithLIBNum("00000004", "00000003", 2),
+				bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
+				bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
+				bstream.TestBlockWithLIBNum("00000009", "00000008", 3),
+				bstream.TestBlockWithLIBNum("00000120", "00000119", 288),
+				bstream.TestBlockWithLIBNum("00000121", "00000120", 288),
+				bstream.TestBlockWithLIBNum("00000122", "00000121", 288),
+				bstream.TestBlockWithLIBNum("00000124", "00000123", 290),
 			},
-			bufferSize:                 2,
-			expectStartNum:             0,
-			expectReady:                false,
-			expectReadyAfter:           true,
-			expectBlocksInCurrentChain: []uint64{3, 4, 6, 7, 8, 9},
+
+			bufferSize:             0,
+			expectReady:            false,
+			expectedError:          fmt.Errorf("most recent one block is not linkable"),
+			expectedForkableLibNum: nil,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			lsf := bstream.NewTestSourceFactory()
-			obsf := bstream.NewTestSourceFactory()
-			testOneBlockStore, err := dstore.NewStore("test://test", "zstd", "zstd", false)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testOneBlockStore := dstore.NewMockStore(nil)
+
 			fh := NewForkableHub(lsf.NewSource, test.bufferSize, testOneBlockStore)
 
 			go fh.Run()
 
-			ls := <-lsf.Created
-
-			// sending oneblockfiles on demand
-			go func() {
-				for _, oneBlocks := range test.oneBlocksPasses {
-					obs := <-obsf.Created
-					assert.Equal(t, test.expectStartNum, obs.StartBlockNum)
-					for _, blk := range oneBlocks {
-						require.NoError(t, obs.Push(blk, nil))
-					}
-					obs.Shutdown(io.EOF)
-				}
-			}()
-
-			if err := ls.Push(test.liveBlocks[0], nil); err != nil {
-				ls.Shutdown(err)
+			select {
+			case <-fh.Ready:
+			case <-fh.Terminating():
 			}
 
 			assert.Equal(t, test.expectReady, fh.ready)
+			assert.Equal(t, fh.Err(), test.expectedError)
 
-			for _, blk := range test.liveBlocks[1:] {
-				require.NoError(t, ls.Push(blk, nil))
+			if test.expectedError == nil {
+				assert.Equal(t, fh.forkable.LowestBlockNum(), test.expectedForkableLibNum.Number)
 			}
-			assert.Equal(t, test.expectReadyAfter, fh.ready)
-
-			if test.expectBlocksInCurrentChain != nil {
-				var seenBlockNums []uint64
-				var chain []*bstream.PreprocessedBlock
-				fh.forkable.CallWithBlocksFromNum(test.expectBlocksInCurrentChain[0], func(blks []*bstream.PreprocessedBlock) {
-					chain = blks
-				}, false)
-				for _, blk := range chain {
-					seenBlockNums = append(seenBlockNums, blk.Num())
-				}
-				assert.Equal(t, test.expectBlocksInCurrentChain, seenBlockNums)
-			}
-
-			assert.False(t, fh.IsTerminating())
-
 		})
 	}
 }
@@ -900,3 +842,17 @@ func TestForkableHub_SourceThroughCursor(t *testing.T) {
 		})
 	}
 }
+
+// ProcessBlock
+//{
+//incomingBlock: 				bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
+//oneBlocksAvailable: []*pbbstream.Block{
+//bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
+//bstream.TestBlockWithLIBNum("00000004", "00000003", 2),
+//bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
+//bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
+//},
+//expectError: false,
+//expectedForkableLib:
+//assertLinkable: []uint64{5,6,7},
+//assertUnlinkable: nil,

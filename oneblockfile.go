@@ -36,6 +36,7 @@ func DecodeOneblockfileData(data []byte) (*pbbstream.Block, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to create block reader: %w", err)
 	}
+
 	blk, err := blockReader.Read()
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("block reader failed: %w", err)

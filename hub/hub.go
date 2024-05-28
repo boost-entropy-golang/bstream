@@ -43,11 +43,11 @@ type ForkableHub struct {
 	subscribers       []*Subscription
 	sourceChannelSize int
 
-	ready bool
-	Ready chan struct{}
-
 	liveSourceFactory bstream.SourceFactory
 	oneBlocksStore    dstore.Store
+	ready             bool
+
+	Ready chan struct{}
 }
 
 func NewForkableHub(liveSourceFactory bstream.SourceFactory, keepFinalBlocks int, oneBlocksStore dstore.Store, extraForkableOptions ...forkable.Option) *ForkableHub {
@@ -56,8 +56,8 @@ func NewForkableHub(liveSourceFactory bstream.SourceFactory, keepFinalBlocks int
 		liveSourceFactory: liveSourceFactory,
 		keepFinalBlocks:   keepFinalBlocks,
 		sourceChannelSize: 100, // number of blocks that can add up before the subscriber processes them
-		Ready:             make(chan struct{}),
 		oneBlocksStore:    oneBlocksStore,
+		Ready:             make(chan struct{}),
 	}
 
 	hub.forkable = forkable.New(bstream.HandlerFunc(hub.broadcastBlock),
@@ -227,7 +227,7 @@ func (h *ForkableHub) bootstrap() error {
 		return fmt.Errorf("walking through one blocks files: %w", err)
 	}
 
-	if sortedOneBlocksFiles == nil {
+	if len(sortedOneBlocksFiles) == 0 {
 		return fmt.Errorf("no one blocks found")
 	}
 
@@ -245,28 +245,26 @@ func (h *ForkableHub) bootstrap() error {
 			return fmt.Errorf("parsing filename: %w", err)
 		}
 
-		if blockNum >= libNumAsRef {
-			currentBlock, err := decodeOneBlockFromFilename(filename, h.oneBlocksStore)
-			if err != nil {
-				return fmt.Errorf("decoding %s from block store: %w", filename, err)
-			}
-
-			oneBlocksUpToLibRef = append(oneBlocksUpToLibRef, currentBlock)
-
-			err = h.forkable.ProcessBlock(currentBlock, nil)
-			if err != nil {
-				return fmt.Errorf("processing block: %w", err)
-			}
+		if blockNum < libNumAsRef {
+			continue
 		}
 
+		currentBlock, err := decodeOneBlockFromFilename(ctx, filename, h.oneBlocksStore)
+		if err != nil {
+			return fmt.Errorf("decoding %s from block store: %w", filename, err)
+		}
+
+		oneBlocksUpToLibRef = append(oneBlocksUpToLibRef, currentBlock)
+
+		err = h.forkable.ProcessBlock(currentBlock, nil)
+		if err != nil {
+			return fmt.Errorf("processing block: %w", err)
+		}
 	}
 
 	if !h.forkable.Linkable(oneBlocksUpToLibRef[len(oneBlocksUpToLibRef)-1]) {
 		return fmt.Errorf("most recent one block is not linkable")
 	}
-
-	h.ready = true
-	zlog.Info("Hub is ready")
 
 	return nil
 }
@@ -274,54 +272,84 @@ func (h *ForkableHub) bootstrap() error {
 func (h *ForkableHub) Run() {
 	liveSource := h.liveSourceFactory(h)
 	liveSource.OnTerminating(h.reconnect)
-	err := h.bootstrap()
-	if err != nil {
-		h.Shutdown(err)
-		return
+
+	// Isn't this retry to aggressive ?
+	//err := derr.RetryContext(context.Background(), 10, func(ctx context.Context) error {
+	//	return h.bootstrap()
+	//})
+	//if err != nil {
+	//	h.Shutdown(err)
+	//	return
+	//}
+
+	count := 0
+	for {
+		if count >= 5 {
+			h.Shutdown(fmt.Errorf("bootstraping hub"))
+		}
+
+		<-time.After(5 * time.Minute)
+
+		err := h.bootstrap()
+		if err == nil {
+			break
+		}
+
+		count++
 	}
+
+	h.ready = true
+	close(h.Ready)
+	zlog.Info("Hub is ready")
+
 	liveSource.Run()
 }
 func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	ctx := context.Background()
-	libNumRef := blk.LibNum
-	if h.ready {
-		if !h.forkable.Linkable(blk) {
-			sortedOneBlocksFiles, err := h.WalkOneBlocksStore(ctx)
-			if err != nil {
-				return fmt.Errorf("walking through one blocks files: %w", err)
-			}
 
-			if sortedOneBlocksFiles == nil {
-				return fmt.Errorf("no one blocks found")
-			}
+	lastKnownLib := h.forkable.LowestBlockNum()
 
-			for _, filename := range sortedOneBlocksFiles {
-				blockNum, _, _, _, _, err := bstream.ParseFilename(filename)
-				if err != nil {
-					return fmt.Errorf("parsing filename: %w", err)
-				}
-
-				if blockNum >= libNumRef {
-					currentBlock, err := decodeOneBlockFromFilename(filename, h.oneBlocksStore)
-					if err != nil {
-						return fmt.Errorf("decoding %s from block store: %w", filename, err)
-					}
-
-					availableBlock := h.forkable.GetBlockByHash(currentBlock.Id)
-					if availableBlock != nil {
-						//Block already known by the forkable
-						continue
-					}
-
-					err = h.forkable.ProcessBlock(currentBlock, obj)
-					if err != nil {
-						return fmt.Errorf("processing block %d: %w", currentBlock.Number, err)
-					}
-				}
-			}
+	if !h.forkable.Linkable(blk) {
+		sortedOneBlocksFiles, err := h.WalkOneBlocksStore(ctx)
+		if err != nil {
+			return fmt.Errorf("walking through one blocks files: %w", err)
 		}
-		//todo: @stepd. Think we may have a race here where the parent block is always uploaded after we receive the next block through the live source
-		//todo: @stepd: That mean the end user will always be behind by one block. (This is a edge case, but still a bug)
+
+		if len(sortedOneBlocksFiles) == 0 {
+			return fmt.Errorf("no one blocks found")
+		}
+
+		for _, filename := range sortedOneBlocksFiles {
+			blockNum, suffixID, _, _, _, err := bstream.ParseFilename(filename)
+			if err != nil {
+				return fmt.Errorf("parsing filename: %w", err)
+			}
+
+			if blockNum < lastKnownLib {
+				continue
+			}
+			if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); availableBlock != nil {
+				//Block already known by the forkable
+				continue
+			}
+
+			currentBlock, err := decodeOneBlockFromFilename(ctx, filename, h.oneBlocksStore)
+			if err != nil {
+				return fmt.Errorf("decoding %s from block store: %w", filename, err)
+			}
+
+			if blockNum == blk.LibNum {
+				if h.forkable.Linkable(currentBlock) {
+					panic("unlinkable lost some blocks")
+				}
+			}
+
+			err = h.forkable.ProcessBlock(currentBlock, obj)
+			if err != nil {
+				return fmt.Errorf("processing block %d: %w", currentBlock.Number, err)
+			}
+
+		}
 
 		return h.forkable.ProcessBlock(blk, obj)
 	}
@@ -340,9 +368,21 @@ func (h *ForkableHub) WalkOneBlocksStore(ctx context.Context) ([]string, error) 
 		})
 	return sortedOneBlocksFiles, err
 }
+func (h *ForkableHub) WalkOneBlocksStoreFrom(ctx context.Context, startingBlock uint64) ([]string, error) {
+	startingPoint := fmt.Sprintf("%010d", startingBlock)
+	sortedOneBlocksFiles := make([]string, 0)
+	err := h.oneBlocksStore.WalkFrom(
+		ctx,
+		"",
+		startingPoint,
+		func(filename string) error {
+			sortedOneBlocksFiles = append(sortedOneBlocksFiles, filename)
+			return nil
+		})
+	return sortedOneBlocksFiles, err
+}
 
-func decodeOneBlockFromFilename(filename string, store dstore.Store) (*pbbstream.Block, error) {
-	ctx := context.Background()
+func decodeOneBlockFromFilename(ctx context.Context, filename string, store dstore.Store) (*pbbstream.Block, error) {
 	reader, err := store.OpenObject(ctx, filename)
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s from block store: %w", filename, err)
