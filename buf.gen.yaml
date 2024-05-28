@@ -3,6 +3,7 @@ plugins:
   - name: go
     out: pb
     opt: paths=source_relative
+
   - plugin: go-grpc
     out: pb
     opt:

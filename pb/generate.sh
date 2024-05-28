@@ -15,60 +15,46 @@
 
 ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && cd .. && pwd )"
 
-# Protobuf definitions
-PROTO=${1:-"$ROOT/proto"}
-echo "Generating protobuf files... $PROTO"
-
 function main() {
   checks
 
   set -e
 
+  generate "$ROOT" "proto"
+  generate "$ROOT/internal" "proto"
+  generate "$ROOT/forkable" "proto"
+
   cd "$ROOT/pb" &> /dev/null
-
-  generate "sf/bstream/v1/bstream.proto"
-
   echo "generate.sh - `date` - `whoami`" > ./last_generate.txt
   echo "streamingfast/proto revision: `GIT_DIR=$ROOT/.git git rev-parse HEAD`" >> ./last_generate.txt
-
 }
 
 # usage:
-# - generate <protoPath>
-# - generate <protoBasePath/> [<file.proto> ...]
+# - generate <working_directory> <relative_proto_path>
 function generate() {
-    base=""
-    if [[ "$#" -gt 1 ]]; then
-      base="$1"; shift
-    fi
+    working_directory="${1:?}"
+    relative_proto_path="${2:?}"
 
-    for file in "$@"; do
-      protoc -I$PROTO  \
-        --go_out=. --go_opt=paths=source_relative \
-        --go-grpc_out=. --go-grpc_opt=paths=source_relative,require_unimplemented_servers=false \
-         $base$file
-    done
+    echo "Generating $working_directory/$relative_proto_path"
+    pushd "$working_directory" &> /dev/null
+    buf generate "$relative_proto_path"
+    popd &> /dev/null
 }
 
 function checks() {
-  # The old `protoc-gen-go` did not accept any flags. Just using `protoc-gen-go --version` in this
-  # version waits forever. So we pipe some wrong input to make it exit fast. This in the new version
-  # which supports `--version` correctly print the version anyway and discard the standard input
-  # so it's good with both version.
-  result=`printf "" | protoc-gen-go --version 2>&1 | grep -Eo v[0-9\.]+`
-  if [[ "$result" == "" ]]; then
-    echo "Your version of 'protoc-gen-go' (at `which protoc-gen-go`) is not recent enough."
+  if ! $(buf --version 2>&1 | grep -Eq '1\.[2-9][0-9]'); then
+    echo "Your version of 'buf' (at `which buf`) is either not recent enough or too recent."
     echo ""
-    echo "To fix your problem, perform those commands:"
+    echo "To fix your problem, follow the instructions at:"
     echo ""
-    echo "  go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.26.0"
-    echo "  go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2.0"
+    echo "  "
+    echo "  https://buf.build/docs/installation"
     echo ""
     echo "If everything is working as expetcted, the command:"
     echo ""
-    echo "  protoc-gen-go --version"
+    echo "  buf --version"
     echo ""
-    echo "Should print 'protoc-gen-go v1.26.0' (if it just hangs, you don't have the correct version)"
+    echo "Should print '1.30' (version might differs)"
     exit 1
   fi
 }

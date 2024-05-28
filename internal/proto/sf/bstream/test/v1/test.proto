@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package sf.bstream.test.v1;
+
+// Nobody can depends on this package, it's internal to the bstream package, the
+// "internal" package in Golang ensure only the bstream package can depend on it.
+option go_package = "github.com/streamingfast/bstream/internal/pb/sf/bstream/test/v1;pbtest";
+
+// Block is a simple block message for which only the ID is required from which
+// we derive for you the full `pbstream.Block` easily. The ID is expected to be
+// provided in the form <num><id>, for example 1a or 2b or <num><parent_line>_<id>
+// and is used to represents a forked block so you can represents forks easily:
+//
+//  1a -> 2a -> 3a (ID: 3a, ParentID: 2a) -> 4a (ID: 4a, ParentID: 3a)
+//         \ -> 3a_b (ID: 3b, ParentID: 2a) -> 4b (ID: 4b, ParentID: 3b)
+//
+// From this we offer of [ToPbbtreamBlock] to easily convert it to a `pbstream.Block`
+// using the following rules:
+//
+// - The block ID is <num><id> (<parent_line>_ is removed on forked block)
+// - The block number is the first character of the ID
+// - The block ID is the full ID
+// - The previous block ID is <num>-1 if <num> >= 1, otherwise it's empty
+// - The previous block number is <num>-1 if <num> >= 1, otherwise it's 0
+// - The block lib num is <num>-1 if <num> >= 1, otherwise it's 0
+// - The block time is time.Unix(0, 0).UTC().Add(time.Minute * time.Duration(b.Number()))
+//
+message Block {
+  string id = 1;
+}
+
