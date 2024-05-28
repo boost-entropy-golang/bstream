@@ -29,7 +29,7 @@ import (
 
 func TestOneBlocksSource(t *testing.T) {
 	store := dstore.NewMockStore(nil)
-	addToMockStore(t, store,
+	AddToMockStore(t, store,
 		&pbtest.Block{Id: "1a"},
 		&pbtest.Block{Id: "2a"},
 		&pbtest.Block{Id: "3a"},
@@ -56,7 +56,7 @@ func TestOneBlocksSource(t *testing.T) {
 
 func TestOneBlocksSource_LowestNumSet(t *testing.T) {
 	store := dstore.NewMockStore(nil)
-	addToMockStore(t, store,
+	AddToMockStore(t, store,
 		&pbtest.Block{Id: "1a"},
 		&pbtest.Block{Id: "2a"},
 		&pbtest.Block{Id: "3a"},
@@ -79,7 +79,7 @@ func TestOneBlocksSource_LowestNumSet(t *testing.T) {
 
 func TestOneBlocksSource_SkipperFuncSet(t *testing.T) {
 	store := dstore.NewMockStore(nil)
-	addToMockStore(t, store,
+	AddToMockStore(t, store,
 		&pbtest.Block{Id: "1a"},
 		&pbtest.Block{Id: "2a"},
 		&pbtest.Block{Id: "3a_b"},
@@ -103,7 +103,7 @@ func TestOneBlocksSource_SkipperFuncSet(t *testing.T) {
 	require.Equal(t, "3a", recorder.blocks[2].Id)
 }
 
-func addToMockStore(t *testing.T, store *dstore.MockStore, blocks ...*pbtest.Block) {
+func AddToMockStore(t *testing.T, store *dstore.MockStore, blocks ...*pbtest.Block) {
 	t.Helper()
 
 	for _, block := range blocks {

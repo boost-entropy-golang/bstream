@@ -45,7 +45,6 @@ type ForkableHub struct {
 
 	liveSourceFactory bstream.SourceFactory
 	oneBlocksStore    dstore.Store
-	ready             bool
 
 	Ready chan struct{}
 }
@@ -79,7 +78,7 @@ func NewForkableHub(liveSourceFactory bstream.SourceFactory, keepFinalBlocks int
 }
 
 func (h *ForkableHub) LowestBlockNum() uint64 {
-	if h != nil && h.ready {
+	if h != nil && h.IsReady() {
 		return h.forkable.LowestBlockNum()
 	}
 	return 0
@@ -102,7 +101,7 @@ func (h *ForkableHub) GetBlockByHash(id string) (out *pbbstream.Block) {
 }
 
 func (h *ForkableHub) HeadInfo() (headNum uint64, headID string, headTime time.Time, libNum uint64, err error) {
-	if h != nil && h.ready {
+	if h != nil && h.IsReady() {
 		headNum, headID, headTime, libNum, err = h.forkable.HeadInfo()
 		zlog.Debug("forkable hub head info", zap.Uint64("head_num", headNum), zap.String("head_id", headID), zap.Time("head_time", headTime), zap.Uint64("lib_num", libNum))
 		return
@@ -113,7 +112,7 @@ func (h *ForkableHub) HeadInfo() (headNum uint64, headID string, headTime time.T
 }
 
 func (h *ForkableHub) HeadNum() uint64 {
-	if h != nil && h.ready {
+	if h != nil && h.IsReady() {
 		return h.forkable.HeadNum()
 	}
 	return 0
@@ -129,7 +128,12 @@ func (h *ForkableHub) MatchSuffix(req string) bool {
 }
 
 func (h *ForkableHub) IsReady() bool {
-	return h.ready
+	select {
+	case <-h.Ready:
+		return true
+	default:
+		return false
+	}
 }
 
 // subscribe must be called while hub is locked
@@ -240,12 +244,17 @@ func (h *ForkableHub) bootstrap() error {
 
 	oneBlocksUpToLibRef := make([]*pbbstream.Block, 0)
 	for _, filename := range sortedOneBlocksFiles {
-		blockNum, _, _, _, _, err := bstream.ParseFilename(filename)
+		blockNum, suffixID, _, _, _, err := bstream.ParseFilename(filename)
 		if err != nil {
 			return fmt.Errorf("parsing filename: %w", err)
 		}
 
 		if blockNum < libNumAsRef {
+			continue
+		}
+
+		if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); availableBlock != nil {
+			//Block already known by the forkable
 			continue
 		}
 
@@ -273,36 +282,17 @@ func (h *ForkableHub) Run() {
 	liveSource := h.liveSourceFactory(h)
 	liveSource.OnTerminating(h.reconnect)
 
-	// Isn't this retry to aggressive ?
-	//err := derr.RetryContext(context.Background(), 10, func(ctx context.Context) error {
-	//	return h.bootstrap()
-	//})
-	//if err != nil {
-	//	h.Shutdown(err)
-	//	return
-	//}
-
-	count := 0
-	for {
-		if count >= 5 {
-			h.Shutdown(fmt.Errorf("bootstraping hub"))
-		}
-
-		<-time.After(5 * time.Minute)
-
-		err := h.bootstrap()
-		if err == nil {
-			break
-		}
-
-		count++
+	err := h.bootstrap()
+	if err != nil {
+		zlog.Warn("bootstrapping incomplete", zap.Error(err))
+	} else {
+		close(h.Ready)
 	}
 
-	h.ready = true
-	close(h.Ready)
+	liveSource.Run()
+
 	zlog.Info("Hub is ready")
 
-	liveSource.Run()
 }
 func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
 	ctx := context.Background()
@@ -333,28 +323,30 @@ func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error 
 				continue
 			}
 
-			currentBlock, err := decodeOneBlockFromFilename(ctx, filename, h.oneBlocksStore)
+			blockFromFile, err := decodeOneBlockFromFilename(ctx, filename, h.oneBlocksStore)
 			if err != nil {
 				return fmt.Errorf("decoding %s from block store: %w", filename, err)
 			}
 
-			if blockNum == blk.LibNum {
-				if h.forkable.Linkable(currentBlock) {
-					panic("unlinkable lost some blocks")
+			if blockFromFile.Number == blk.LibNum {
+				if !h.forkable.Linkable(blockFromFile) {
+					return fmt.Errorf("cannot link block after reconnection, restart required")
 				}
 			}
 
-			err = h.forkable.ProcessBlock(currentBlock, obj)
+			err = h.forkable.ProcessBlock(blockFromFile, obj)
 			if err != nil {
-				return fmt.Errorf("processing block %d: %w", currentBlock.Number, err)
+				return fmt.Errorf("processing block %d: %w", blockFromFile.Number, err)
 			}
 
 		}
-
-		return h.forkable.ProcessBlock(blk, obj)
 	}
 
-	return nil
+	if !h.IsReady() {
+		close(h.Ready)
+	}
+
+	return h.forkable.ProcessBlock(blk, obj)
 }
 
 func (h *ForkableHub) WalkOneBlocksStore(ctx context.Context) ([]string, error) {
