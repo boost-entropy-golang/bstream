@@ -321,144 +321,6 @@ func AddToMockStore(t *testing.T, store *dstore.MockStore, blocks ...*pbbstream.
 	}
 }
 
-func TestForkableHub_SourceFromBlockNum(t *testing.T) {
-
-	tests := []struct {
-		name         string
-		forkdbBlocks []*pbbstream.Block
-		requestBlock uint64
-		expectBlocks []expectedBlock
-	}{
-		{
-			name: "vanilla",
-			forkdbBlocks: []*pbbstream.Block{
-				bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
-				bstream.TestBlockWithLIBNum("00000004", "00000003", 2),
-				bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
-				bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
-				bstream.TestBlockWithLIBNum("00000009", "00000008", 4),
-				bstream.TestBlockWithLIBNum("0000000a", "00000009", 5),
-			},
-			requestBlock: 5,
-			expectBlocks: []expectedBlock{
-				{
-					bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
-					bstream.StepNewIrreversible,
-					5,
-				},
-
-				{
-					bstream.TestBlockWithLIBNum("00000008", "00000005", 3),
-					bstream.StepNew,
-					5,
-				},
-				{
-					bstream.TestBlockWithLIBNum("00000009", "00000008", 4),
-					bstream.StepNew,
-					5,
-				},
-
-				{
-					bstream.TestBlockWithLIBNum("0000000a", "00000009", 5),
-					bstream.StepNew,
-					5,
-				},
-			},
-		},
-		{
-			name: "step_irreversible",
-			forkdbBlocks: []*pbbstream.Block{
-				bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
-				bstream.TestBlockWithLIBNum("00000004", "00000003", 2),
-				bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
-				bstream.TestBlockWithLIBNum("00000008", "00000005", 4),
-				bstream.TestBlockWithLIBNum("00000009", "00000008", 5),
-				bstream.TestBlockWithLIBNum("0000000a", "00000009", 8),
-			},
-			requestBlock: 3,
-			expectBlocks: []expectedBlock{
-				{
-					bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
-					bstream.StepNewIrreversible,
-					3,
-				},
-				{
-					bstream.TestBlockWithLIBNum("00000004", "00000003", 2),
-					bstream.StepNewIrreversible,
-					4,
-				},
-				{
-					bstream.TestBlockWithLIBNum("00000005", "00000004", 2),
-					bstream.StepNewIrreversible,
-					5, // LIB set to itself
-				},
-
-				{
-					bstream.TestBlockWithLIBNum("00000008", "00000005", 4),
-					bstream.StepNewIrreversible,
-					8, // real current hub LIB
-				},
-				{
-					bstream.TestBlockWithLIBNum("00000009", "00000008", 5),
-					bstream.StepNew,
-					8,
-				},
-
-				{
-					bstream.TestBlockWithLIBNum("0000000a", "00000009", 8),
-					bstream.StepNew,
-					8,
-				},
-			},
-		},
-
-		{
-			name: "no source",
-			forkdbBlocks: []*pbbstream.Block{
-				bstream.TestBlockWithLIBNum("00000003", "00000002", 2),
-				bstream.TestBlockWithLIBNum("00000004", "00000003", 3),
-			},
-			requestBlock: 5,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-
-			fh := &ForkableHub{
-				Shutter: shutter.New(),
-			}
-			fh.forkable = forkable.New(bstream.HandlerFunc(fh.broadcastBlock),
-				forkable.HoldBlocksUntilLIB(),
-				forkable.WithKeptFinalBlocks(100),
-			)
-			close(fh.Ready)
-
-			for _, blk := range test.forkdbBlocks {
-				fh.forkable.ProcessBlock(blk, nil)
-			}
-
-			var seenBlocks []expectedBlock
-			handler := bstream.HandlerFunc(func(blk *pbbstream.Block, obj interface{}) error {
-				seenBlocks = append(seenBlocks, expectedBlock{blk, obj.(*forkable.ForkableObject).Step(), obj.(*forkable.ForkableObject).Cursor().LIB.Num()})
-				if len(seenBlocks) == len(test.expectBlocks) {
-					return fmt.Errorf("done")
-				}
-				return nil
-			})
-			source := fh.SourceFromBlockNum(test.requestBlock, handler)
-			if test.expectBlocks == nil {
-				assert.Nil(t, source)
-				return
-			}
-			require.NotNil(t, source)
-			go source.Run()
-			<-source.Terminating()
-			assertExpectedBlocks(t, test.expectBlocks, seenBlocks)
-		})
-	}
-}
-
 func TestForkableHub_SourceFromCursor(t *testing.T) {
 
 	tests := []struct {
@@ -696,7 +558,6 @@ func TestForkableHub_SourceFromCursor(t *testing.T) {
 				forkable.HoldBlocksUntilLIB(),
 				forkable.WithKeptFinalBlocks(100),
 			)
-			close(fh.Ready)
 
 			for _, blk := range test.forkdbBlocks {
 				require.NoError(t, fh.forkable.ProcessBlock(blk, nil))
@@ -1007,8 +868,6 @@ func TestForkableHub_SourceThroughCursor(t *testing.T) {
 				forkable.HoldBlocksUntilLIB(),
 				forkable.WithKeptFinalBlocks(100),
 			)
-
-			close(fh.Ready)
 
 			for _, blk := range test.forkdbBlocks {
 				require.NoError(t, fh.forkable.ProcessBlock(blk, nil))
