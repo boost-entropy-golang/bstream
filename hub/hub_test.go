@@ -239,8 +239,6 @@ func TestForkableHub_Run(t *testing.T) {
 		oneBlocksAfterBootstrap  []*pbbstream.Block
 		blockToProcess           *pbbstream.Block
 		bufferSize               int
-		expectedError            error
-		expectedReady            bool
 		expectedForkableLibNum   uint64
 		expectedHeadBlock        string
 	}{
@@ -255,8 +253,6 @@ func TestForkableHub_Run(t *testing.T) {
 			oneBlocksAfterBootstrap: []*pbbstream.Block{},
 			blockToProcess:          bstream.TestBlockWithLIBNum("00000009", "00000008", 3),
 			bufferSize:              0,
-			expectedError:           nil,
-			expectedReady:           true,
 			expectedForkableLibNum:  3,
 			expectedHeadBlock:       "00000009",
 		},
@@ -275,6 +271,12 @@ func TestForkableHub_Run(t *testing.T) {
 
 			go fh.Run()
 
+			select {
+			case <-fh.Ready:
+			case <-time.After(1 * time.Second):
+				t.Fail()
+			}
+
 			AddToMockStore(t, testOneBlockStore, test.oneBlocksAfterBootstrap...)
 			ls := <-lsf.Created
 
@@ -283,17 +285,11 @@ func TestForkableHub_Run(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			time.Sleep(5 * time.Second)
-			assert.Equal(t, err, fh.Err())
-			assert.Equal(t, test.expectedReady, fh.IsReady())
+			assert.Equal(t, fh.forkable.LowestBlockNum(), test.expectedForkableLibNum)
 
-			if test.expectedError == nil {
-				assert.Equal(t, fh.forkable.LowestBlockNum(), test.expectedForkableLibNum)
-
-				_, headID, _, _, err := fh.forkable.HeadInfo()
-				require.NoError(t, err)
-				assert.Equal(t, test.expectedHeadBlock, headID)
-			}
+			_, headID, _, _, err := fh.forkable.HeadInfo()
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedHeadBlock, headID)
 		})
 	}
 }

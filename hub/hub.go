@@ -409,96 +409,13 @@ func (h *ForkableHub) broadcastBlock(blk *pbbstream.Block, obj interface{}) erro
 }
 
 func (h *ForkableHub) reconnect(err error) {
-	failFunc := func() {
-		h.Shutdown(fmt.Errorf("cannot link new blocks to chain after a reconnection"))
-	}
-
-	rh := newReconnectionHandler(
-		h.forkable,
-		h.forkable.HeadNum,
-		time.Minute,
-		failFunc,
-	)
-
-	zlog.Info("reconnecting hub after disconnection. expecting to reconnect and get blocks linking to headnum within delay",
-		zap.Duration("delay", rh.timeout),
-		zap.Uint64("current_head_block_num", rh.previousHeadBlock),
+	zlog.Info("reconnecting hub after disconnection. expecting to reconnect",
 		zap.Error(err))
 
-	liveSource := h.liveSourceFactory(rh)
+	liveSource := h.liveSourceFactory(h)
 	liveSource.OnTerminating(func(err error) {
-		if rh.success {
-			h.reconnect(err)
-			return
-		}
-		failFunc()
+		h.reconnect(err)
+		return
 	})
 	go liveSource.Run()
-}
-
-func substractAndRoundDownBlocks(blknum, sub uint64) uint64 {
-	var out uint64
-	if blknum < sub {
-		out = 0
-	} else {
-		out = blknum - sub
-	}
-	out = out / 100 * 100
-
-	if out < bstream.GetProtocolFirstStreamableBlock {
-		return bstream.GetProtocolFirstStreamableBlock
-	}
-
-	return out
-}
-
-type reconnectionHandler struct {
-	start             time.Time
-	timeout           time.Duration
-	previousHeadBlock uint64
-	headBlockGetter   func() uint64
-	handler           bstream.Handler
-	success           bool
-	onFailure         func()
-}
-
-func newReconnectionHandler(
-	h bstream.Handler,
-	headBlockGetter func() uint64,
-	timeout time.Duration,
-	onFailure func(),
-) *reconnectionHandler {
-	return &reconnectionHandler{
-		handler:           h,
-		headBlockGetter:   headBlockGetter,
-		previousHeadBlock: headBlockGetter(),
-		timeout:           timeout,
-		onFailure:         onFailure,
-	}
-}
-
-func (rh *reconnectionHandler) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
-	if !rh.success {
-		if rh.start.IsZero() {
-			rh.start = time.Now()
-		}
-		if time.Since(rh.start) > rh.timeout {
-			rh.onFailure()
-			return fmt.Errorf("reconnection failed")
-		}
-		// head block has moved, the blocks are linkable
-		if rh.headBlockGetter() > rh.previousHeadBlock {
-			zlog.Info("reconnection successful")
-			rh.success = true
-		}
-	}
-
-	err := rh.handler.ProcessBlock(blk, obj)
-	if err != nil {
-		if rh.headBlockGetter() == rh.previousHeadBlock {
-			rh.onFailure()
-		}
-		return err
-	}
-	return nil
 }
