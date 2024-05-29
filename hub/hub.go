@@ -286,15 +286,16 @@ func (h *ForkableHub) Run() {
 	if err != nil {
 		zlog.Warn("bootstrapping incomplete", zap.Error(err))
 	} else {
+		zlog.Info("Hub is ready")
 		close(h.Ready)
 	}
 
 	liveSource.Run()
 
-	zlog.Info("Hub is ready")
-
 }
 func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
+	zlog.Debug("Processing block", zap.Uint64("block number", blk.Number), zap.String("block Id", blk.Id))
+
 	ctx := context.Background()
 
 	lastKnownLib := h.forkable.LowestBlockNum()
@@ -343,6 +344,7 @@ func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error 
 	}
 
 	if !h.IsReady() {
+		zlog.Info("Hub is ready")
 		close(h.Ready)
 	}
 
