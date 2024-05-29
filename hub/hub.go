@@ -242,18 +242,18 @@ func (h *ForkableHub) bootstrap() error {
 		return fmt.Errorf("parsing filename: %w", err)
 	}
 
-	oneBlocksUpToLibRef := make([]*pbbstream.Block, 0)
+	oneBlocksAboveLibRef := make([]*pbbstream.Block, 0)
 	for _, filename := range sortedOneBlocksFiles {
-		blockNum, suffixID, _, _, _, err := bstream.ParseFilename(filename)
+		blockNumFromFile, suffixID, _, _, _, err := bstream.ParseFilename(filename)
 		if err != nil {
 			return fmt.Errorf("parsing filename: %w", err)
 		}
 
-		if blockNum < libNumAsRef {
+		if blockNumFromFile < libNumAsRef {
 			continue
 		}
 
-		if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); availableBlock != nil {
+		if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); (availableBlock.Number == blockNumFromFile) && availableBlock != nil {
 			//Block already known by the forkable
 			continue
 		}
@@ -263,7 +263,7 @@ func (h *ForkableHub) bootstrap() error {
 			return fmt.Errorf("decoding %s from block store: %w", filename, err)
 		}
 
-		oneBlocksUpToLibRef = append(oneBlocksUpToLibRef, currentBlock)
+		oneBlocksAboveLibRef = append(oneBlocksAboveLibRef, currentBlock)
 
 		err = h.forkable.ProcessBlock(currentBlock, nil)
 		if err != nil {
@@ -271,7 +271,7 @@ func (h *ForkableHub) bootstrap() error {
 		}
 	}
 
-	if !h.forkable.Linkable(oneBlocksUpToLibRef[len(oneBlocksUpToLibRef)-1]) {
+	if !h.forkable.Linkable(oneBlocksAboveLibRef[len(oneBlocksAboveLibRef)-1]) {
 		return fmt.Errorf("most recent one block is not linkable")
 	}
 
@@ -284,7 +284,7 @@ func (h *ForkableHub) Run() {
 
 	err := h.bootstrap()
 	if err != nil {
-		zlog.Warn("bootstrapping incomplete", zap.Error(err))
+		zlog.Warn("bootstrapping from one-block-files incomplete. Will bootstrap from incoming live blocks", zap.Error(err))
 	} else {
 		zlog.Info("Hub is ready")
 		close(h.Ready)
@@ -298,10 +298,14 @@ func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error 
 
 	ctx := context.Background()
 
+	forkableHasLib := h.forkable.ForkDBHasLib()
 	lastKnownLib := h.forkable.LowestBlockNum()
+	if !forkableHasLib {
+		lastKnownLib = blk.LibNum
+	}
 
 	if !h.forkable.Linkable(blk) {
-		sortedOneBlocksFiles, err := h.WalkOneBlocksStore(ctx)
+		sortedOneBlocksFiles, err := h.WalkOneBlocksStoreFrom(ctx, lastKnownLib)
 		if err != nil {
 			return fmt.Errorf("walking through one blocks files: %w", err)
 		}
@@ -311,15 +315,12 @@ func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error 
 		}
 
 		for _, filename := range sortedOneBlocksFiles {
-			blockNum, suffixID, _, _, _, err := bstream.ParseFilename(filename)
+			blockNumFromFile, suffixID, _, _, _, err := bstream.ParseFilename(filename)
 			if err != nil {
 				return fmt.Errorf("parsing filename: %w", err)
 			}
-
-			if blockNum < lastKnownLib {
-				continue
-			}
-			if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); availableBlock != nil {
+			
+			if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); (availableBlock.Number == blockNumFromFile) && availableBlock != nil {
 				//Block already known by the forkable
 				continue
 			}
@@ -329,7 +330,7 @@ func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error 
 				return fmt.Errorf("decoding %s from block store: %w", filename, err)
 			}
 
-			if blockFromFile.Number == blk.LibNum {
+			if blockFromFile.Number == blk.LibNum && forkableHasLib {
 				if !h.forkable.Linkable(blockFromFile) {
 					return fmt.Errorf("cannot link block after reconnection, restart required")
 				}

@@ -517,6 +517,10 @@ func New(h bstream.Handler, opts ...Option) *Forkable {
 	return f
 }
 
+func (p *Forkable) ForkDBHasLib() bool {
+	return p.forkDB.HasLIB()
+}
+
 func (p *Forkable) targetChainBlock(blk bstream.BlockRef) bstream.BlockRef {
 	if p.ensureBlockFlows.ID() != "" && !p.ensureBlockFlowed {
 		return p.ensureBlockFlows
