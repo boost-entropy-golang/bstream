@@ -204,7 +204,7 @@ func (p *Forkable) blocksFromNum(num uint64) ([]*bstream.PreprocessedBlock, erro
 		out = append(out, wrapBlockForkableObject(seg[i].Object.(*ForkableBlock), step, headRef, lib, nil))
 	}
 	if out == nil {
-		return nil, fmt.Errorf("no block found in complete segment from head %s, looking for block num %d", head, num)
+		return nil, fmt.Errorf("no block found in complete segment from head %d (%s), looking for block num %d", head.Number, head.Id, num)
 	}
 	return out, nil
 }
