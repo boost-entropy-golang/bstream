@@ -305,9 +305,8 @@ func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error 
 	zlog.Debug("forkable state", zap.Uint64("forkable_LibNum", h.forkable.LowestBlockNum()), zap.Uint64("forkable_headNum", h.forkable.HeadNum()))
 
 	if !h.forkable.Linkable(blk) {
-		err := h.linkLiveUsingOneBlocks(ctx, blk)
-		if err != nil {
-			zlog.Warn("linking live blocks using one blocks failed", zap.Error(err))
+		if err := h.linkLiveUsingOneBlocks(ctx, blk); err != nil {
+			return err
 		}
 	}
 
@@ -334,7 +333,8 @@ func (h *ForkableHub) linkLiveUsingOneBlocks(ctx context.Context, blk *pbbstream
 	}
 
 	if len(sortedOneBlocksFiles) == 0 {
-		return fmt.Errorf("no one blocks found")
+		zlog.Warn("no one blocks found while trying to link live block", zap.Uint64("processed_block", blk.Number))
+		return nil
 	}
 
 	for _, filename := range sortedOneBlocksFiles {
