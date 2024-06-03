@@ -17,10 +17,11 @@ package hub
 import (
 	"context"
 	"fmt"
-	"github.com/streamingfast/dstore"
 	"io"
 	"strings"
 	"time"
+
+	"github.com/streamingfast/dstore"
 
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/bstream/forkable"
@@ -237,10 +238,11 @@ func (h *ForkableHub) bootstrap() error {
 
 	mostRecentOneBlock := sortedOneBlocksFiles[len(sortedOneBlocksFiles)-1]
 
-	_, _, _, libNumAsRef, _, err := bstream.ParseFilename(mostRecentOneBlock)
+	_, _, _, refLibNum, _, err := bstream.ParseFilename(mostRecentOneBlock)
 	if err != nil {
 		return fmt.Errorf("parsing filename: %w", err)
 	}
+	lowestBlockNum := substractAndRoundDownBlocks(refLibNum, uint64(h.keepFinalBlocks))
 
 	oneBlocksAboveLibRef := make([]*pbbstream.Block, 0)
 	for _, filename := range sortedOneBlocksFiles {
@@ -249,7 +251,7 @@ func (h *ForkableHub) bootstrap() error {
 			return fmt.Errorf("parsing filename: %w", err)
 		}
 
-		if blockNumFromFile < libNumAsRef {
+		if blockNumFromFile < lowestBlockNum {
 			continue
 		}
 
@@ -437,4 +439,20 @@ func (h *ForkableHub) reconnect(err error) {
 		return
 	})
 	go liveSource.Run()
+}
+
+func substractAndRoundDownBlocks(blknum, sub uint64) uint64 {
+	var out uint64
+	if blknum < sub {
+		out = 0
+	} else {
+		out = blknum - sub
+	}
+	out = out / 100 * 100
+
+	if out < bstream.GetProtocolFirstStreamableBlock {
+		return bstream.GetProtocolFirstStreamableBlock
+	}
+
+	return out
 }
