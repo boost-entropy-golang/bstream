@@ -17,6 +17,7 @@ package forkable
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,6 +90,18 @@ func (p *Forkable) GetBlockByHash(id string) (out *pbbstream.Block) {
 	}
 
 	return block.(*ForkableBlock).Block
+}
+
+func (p *Forkable) GetBlockByHashSuffix(suffix string) (out *pbbstream.Block) {
+	p.RLock()
+	defer p.RUnlock()
+
+	for key, block := range p.forkDB.objects {
+		if strings.HasSuffix(key, suffix) {
+			return block.(*ForkableBlock).Block
+		}
+	}
+	return nil
 }
 
 func (p *Forkable) CallWithBlocksFromNum(num uint64, callback func([]*bstream.PreprocessedBlock), withForks bool) (err error) {
@@ -502,6 +515,10 @@ func New(h bstream.Handler, opts ...Option) *Forkable {
 	f.forkDB.logger = f.logger
 
 	return f
+}
+
+func (p *Forkable) ForkDBHasLib() bool {
+	return p.forkDB.HasLIB()
 }
 
 func (p *Forkable) targetChainBlock(blk bstream.BlockRef) bstream.BlockRef {

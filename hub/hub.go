@@ -15,9 +15,13 @@
 package hub
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+
+	"github.com/streamingfast/dstore"
 
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/bstream/forkable"
@@ -40,33 +44,23 @@ type ForkableHub struct {
 	subscribers       []*Subscription
 	sourceChannelSize int
 
-	ready bool
-	Ready chan struct{}
+	liveSourceFactory bstream.SourceFactory
+	oneBlocksStore    dstore.Store
 
-	liveSourceFactory                  bstream.SourceFactory
-	oneBlocksSourceFactory             bstream.SourceFromNumFactory
-	oneBlocksSourceFactoryWithSkipFunc bstream.SourceFromNumFactoryWithSkipFunc
+	Ready chan struct{}
 }
 
-func NewForkableHub(liveSourceFactory bstream.SourceFactory, oneBlocksSourceFactory interface{}, keepFinalBlocks int, extraForkableOptions ...forkable.Option) *ForkableHub {
+func NewForkableHub(liveSourceFactory bstream.SourceFactory, keepFinalBlocks int, oneBlocksStore dstore.Store, extraForkableOptions ...forkable.Option) *ForkableHub {
 	hub := &ForkableHub{
 		Shutter:           shutter.New(),
 		liveSourceFactory: liveSourceFactory,
 		keepFinalBlocks:   keepFinalBlocks,
 		sourceChannelSize: 100, // number of blocks that can add up before the subscriber processes them
+		oneBlocksStore:    oneBlocksStore,
 		Ready:             make(chan struct{}),
 	}
 
-	switch fact := oneBlocksSourceFactory.(type) {
-	case bstream.SourceFromNumFactoryWithSkipFunc:
-		hub.oneBlocksSourceFactoryWithSkipFunc = fact
-	case bstream.SourceFromNumFactory:
-		hub.oneBlocksSourceFactory = fact
-	default:
-		panic("invalid oneBlocksSourceFactory interface")
-	}
-
-	hub.forkable = forkable.New(bstream.HandlerFunc(hub.processBlock),
+	hub.forkable = forkable.New(bstream.HandlerFunc(hub.broadcastBlock),
 		forkable.HoldBlocksUntilLIB(),
 		forkable.WithKeptFinalBlocks(keepFinalBlocks),
 	)
@@ -85,7 +79,7 @@ func NewForkableHub(liveSourceFactory bstream.SourceFactory, oneBlocksSourceFact
 }
 
 func (h *ForkableHub) LowestBlockNum() uint64 {
-	if h != nil && h.ready {
+	if h != nil && h.IsReady() {
 		return h.forkable.LowestBlockNum()
 	}
 	return 0
@@ -108,7 +102,7 @@ func (h *ForkableHub) GetBlockByHash(id string) (out *pbbstream.Block) {
 }
 
 func (h *ForkableHub) HeadInfo() (headNum uint64, headID string, headTime time.Time, libNum uint64, err error) {
-	if h != nil && h.ready {
+	if h != nil && h.IsReady() {
 		headNum, headID, headTime, libNum, err = h.forkable.HeadInfo()
 		zlog.Debug("forkable hub head info", zap.Uint64("head_num", headNum), zap.String("head_id", headID), zap.Time("head_time", headTime), zap.Uint64("lib_num", libNum))
 		return
@@ -119,7 +113,7 @@ func (h *ForkableHub) HeadInfo() (headNum uint64, headID string, headTime time.T
 }
 
 func (h *ForkableHub) HeadNum() uint64 {
-	if h != nil && h.ready {
+	if h != nil && h.IsReady() {
 		return h.forkable.HeadNum()
 	}
 	return 0
@@ -135,14 +129,12 @@ func (h *ForkableHub) MatchSuffix(req string) bool {
 }
 
 func (h *ForkableHub) IsReady() bool {
-	return h.ready
-}
-
-func (h *ForkableHub) bootstrapperHandler(blk *pbbstream.Block, obj interface{}) error {
-	if h.ready {
-		return h.forkable.ProcessBlock(blk, obj)
+	select {
+	case <-h.Ready:
+		return true
+	default:
+		return false
 	}
-	return h.bootstrap(blk)
 }
 
 // subscribe must be called while hub is locked
@@ -232,93 +224,219 @@ func (h *ForkableHub) SourceThroughCursor(startBlock uint64, cursor *bstream.Cur
 	return
 }
 
-func (h *ForkableHub) bootstrap(blk *pbbstream.Block) error {
-	zlog.Info("bootstrapping ForkableHub", zap.Stringer("blk", blk.AsRef()))
+func (h *ForkableHub) bootstrap() error {
+	ctx := context.Background()
 
-	// don't try bootstrapping from one-block-files if we are not at HEAD
-	if blk.Number < h.forkable.HeadNum() {
-		zlog.Info("skip bootstrapping ForkableHub from one-block-files", zap.Stringer("blk", blk.AsRef()), zap.Uint64("forkdb_head_num", h.forkable.HeadNum()))
-		return h.forkable.ProcessBlock(blk, nil)
+	sortedOneBlocksFiles, err := h.WalkOneBlocksStore(ctx)
+	if err != nil {
+		return fmt.Errorf("walking through one blocks files: %w", err)
 	}
 
-	if !h.forkable.Linkable(blk) {
-		startBlock := substractAndRoundDownBlocks(blk.LibNum, uint64(h.keepFinalBlocks))
-		zlog.Info("bootstrapping on un-linkable block", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk.AsRef()))
+	if len(sortedOneBlocksFiles) == 0 {
+		return fmt.Errorf("no one blocks found")
+	}
 
-		var oneBlocksSource bstream.Source
-		if h.oneBlocksSourceFactoryWithSkipFunc != nil {
-			skipFunc := func(idSuffix string) bool {
-				return h.MatchSuffix(idSuffix)
+	mostRecentOneBlock := sortedOneBlocksFiles[len(sortedOneBlocksFiles)-1]
+
+	_, _, _, refLibNum, _, err := bstream.ParseFilename(mostRecentOneBlock)
+	if err != nil {
+		return fmt.Errorf("parsing filename: %w", err)
+	}
+	lowestBlockNum := substractAndRoundDownBlocks(refLibNum, uint64(h.keepFinalBlocks))
+
+	oneBlocksAboveLibRef := make([]*pbbstream.Block, 0)
+	for _, filename := range sortedOneBlocksFiles {
+		blockNumFromFile, suffixID, _, _, _, err := bstream.ParseFilename(filename)
+		if err != nil {
+			return fmt.Errorf("parsing filename: %w", err)
+		}
+
+		if blockNumFromFile < lowestBlockNum {
+			continue
+		}
+
+		if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); availableBlock != nil {
+			if availableBlock.Number == blockNumFromFile {
+				//Block already known by the forkable
+				continue
 			}
-			oneBlocksSource = h.oneBlocksSourceFactoryWithSkipFunc(startBlock, h.forkable, skipFunc)
-		} else {
-			oneBlocksSource = h.oneBlocksSourceFactory(startBlock, h.forkable)
 		}
 
-		if oneBlocksSource == nil {
-			zlog.Debug("no oneBlocksSource from factory, not bootstrapping hub yet")
-			return nil
+		currentBlock, err := decodeOneBlockFromFilename(ctx, filename, h.oneBlocksStore)
+		if err != nil {
+			return fmt.Errorf("decoding %s from block store: %w", filename, err)
 		}
-		zlog.Info("bootstrapping ForkableHub from one-block-files", zap.Uint64("start_block", startBlock), zap.Stringer("head_block", blk.AsRef()))
-		go oneBlocksSource.Run()
-		select {
-		case <-oneBlocksSource.Terminating():
-			break
-		case <-h.Terminating():
-			return h.Err()
+
+		oneBlocksAboveLibRef = append(oneBlocksAboveLibRef, currentBlock)
+
+		err = h.forkable.ProcessBlock(currentBlock, nil)
+		if err != nil {
+			return fmt.Errorf("processing block: %w", err)
 		}
 	}
 
-	if err := h.forkable.ProcessBlock(blk, nil); err != nil {
-		return err
+	if !h.forkable.Linkable(oneBlocksAboveLibRef[len(oneBlocksAboveLibRef)-1]) {
+		return fmt.Errorf("most recent one block is not linkable")
 	}
 
-	if !h.forkable.Linkable(blk) {
-		fdb_head := h.forkable.HeadNum()
-		if blk.Number < fdb_head {
-			zlog.Info("live block not linkable yet, will retry when we reach forkDB's HEAD", zap.Stringer("blk_from_live", blk.AsRef()), zap.Uint64("forkdb_head_num", fdb_head))
-			return nil
-		}
-		zlog.Warn("cannot initialize forkDB from one-block-files (hole between live and one-block-files). Will retry on every incoming live block.", zap.Uint64("forkdb_head_block", fdb_head), zap.Stringer("blk_from_live", blk.AsRef()))
-		return nil
-	}
-	zlog.Info("hub is now Ready")
-
-	h.ready = true
-	close(h.Ready)
 	return nil
 }
 
 func (h *ForkableHub) Run() {
-	liveSource := h.liveSourceFactory(bstream.HandlerFunc(h.bootstrapperHandler))
+	liveSource := h.liveSourceFactory(h)
 	liveSource.OnTerminating(h.reconnect)
+
+	err := h.bootstrap()
+	if err != nil {
+		zlog.Warn("bootstrapping from one-block-files incomplete. Will bootstrap from incoming live blocks", zap.Error(err))
+	} else {
+		zlog.Info("Hub is ready")
+		close(h.Ready)
+	}
+
 	liveSource.Run()
+
+}
+func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
+	zlog.Info("processing block", zap.Uint64("block_number", blk.Number), zap.String("block_Id", blk.Id), zap.Uint64("block_lib", blk.LibNum))
+
+	ctx := context.Background()
+
+	zlog.Debug("forkable state", zap.Uint64("forkable_LibNum", h.forkable.LowestBlockNum()), zap.Uint64("forkable_headNum", h.forkable.HeadNum()))
+
+	if !h.forkable.Linkable(blk) {
+		if err := h.linkLiveUsingOneBlocks(ctx, blk); err != nil {
+			return err
+		}
+	}
+
+	if !h.IsReady() && h.forkable.Linkable(blk) {
+		zlog.Info("Hub is ready")
+		close(h.Ready)
+	}
+
+	return h.forkable.ProcessBlock(blk, obj)
+}
+
+func (h *ForkableHub) linkLiveUsingOneBlocks(ctx context.Context, blk *pbbstream.Block) error {
+
+	lastKnownLib := h.forkable.LowestBlockNum()
+	if !h.forkable.ForkDBHasLib() {
+		lastKnownLib = blk.LibNum
+	}
+
+	zlog.Debug("linking live block using one blocks", zap.Uint64("processed_block", blk.Number), zap.Uint64("last_know_lib", lastKnownLib))
+
+	sortedOneBlocksFiles, err := h.WalkOneBlocksStoreFrom(ctx, lastKnownLib)
+	if err != nil {
+		return fmt.Errorf("walking through one blocks files: %w", err)
+	}
+
+	if len(sortedOneBlocksFiles) == 0 {
+		zlog.Warn("no one blocks found while trying to link live block", zap.Uint64("processed_block", blk.Number))
+		return nil
+	}
+
+	for _, filename := range sortedOneBlocksFiles {
+		blockNumFromFile, suffixID, _, _, _, err := bstream.ParseFilename(filename)
+		if err != nil {
+			return fmt.Errorf("parsing filename: %w", err)
+		}
+
+		if availableBlock := h.forkable.GetBlockByHashSuffix(suffixID); availableBlock != nil {
+			if availableBlock.Number == blockNumFromFile {
+				//Block already known by the forkable
+				continue
+			}
+		}
+
+		blockFromFile, err := decodeOneBlockFromFilename(ctx, filename, h.oneBlocksStore)
+		if err != nil {
+			return fmt.Errorf("decoding %s from block store: %w", filename, err)
+		}
+
+		if blockFromFile.Number == blk.LibNum && h.forkable.ForkDBHasLib() {
+			if !h.forkable.Linkable(blockFromFile) {
+				return fmt.Errorf("cannot link block after reconnection, restart required")
+			}
+		}
+
+		err = h.forkable.ProcessBlock(blockFromFile, nil)
+		if err != nil {
+			return fmt.Errorf("processing block %d: %w", blockFromFile.Number, err)
+		}
+
+	}
+
+	return nil
+}
+func (h *ForkableHub) WalkOneBlocksStore(ctx context.Context) ([]string, error) {
+	sortedOneBlocksFiles := make([]string, 0)
+	err := h.oneBlocksStore.Walk(
+		ctx,
+		"",
+		func(filename string) error {
+			sortedOneBlocksFiles = append(sortedOneBlocksFiles, filename)
+			return nil
+		})
+	return sortedOneBlocksFiles, err
+}
+func (h *ForkableHub) WalkOneBlocksStoreFrom(ctx context.Context, startingBlock uint64) ([]string, error) {
+	startingPoint := fmt.Sprintf("%010d", startingBlock)
+	sortedOneBlocksFiles := make([]string, 0)
+	err := h.oneBlocksStore.WalkFrom(
+		ctx,
+		"",
+		startingPoint,
+		func(filename string) error {
+			sortedOneBlocksFiles = append(sortedOneBlocksFiles, filename)
+			return nil
+		})
+	return sortedOneBlocksFiles, err
+}
+
+func decodeOneBlockFromFilename(ctx context.Context, filename string, store dstore.Store) (*pbbstream.Block, error) {
+	reader, err := store.OpenObject(ctx, filename)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s from block store: %w", filename, err)
+	}
+
+	defer reader.Close()
+
+	readerData, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s from block store: %w", filename, err)
+	}
+
+	return bstream.DecodeOneblockfileData(readerData)
+}
+
+// Notes: that function is called by the forkable when a block is processed
+func (h *ForkableHub) broadcastBlock(blk *pbbstream.Block, obj interface{}) error {
+	zlog.Debug("process_block", zap.Stringer("blk", blk.AsRef()), zap.Any("obj", obj.(*forkable.ForkableObject).Step()))
+	preprocBlock := &bstream.PreprocessedBlock{Block: blk, Obj: obj}
+
+	subscribers := h.subscribers // we may remove some from the original slice during the loop
+
+	for _, sub := range subscribers {
+		err := sub.push(preprocBlock)
+		if err != nil {
+			h.unsubscribe(sub)
+			sub.Shutdown(err)
+		}
+
+	}
+	return nil
 }
 
 func (h *ForkableHub) reconnect(err error) {
-	failFunc := func() {
-		h.Shutdown(fmt.Errorf("cannot link new blocks to chain after a reconnection"))
-	}
-
-	rh := newReconnectionHandler(
-		h.forkable,
-		h.forkable.HeadNum,
-		time.Minute,
-		failFunc,
-	)
-
-	zlog.Info("reconnecting hub after disconnection. expecting to reconnect and get blocks linking to headnum within delay",
-		zap.Duration("delay", rh.timeout),
-		zap.Uint64("current_head_block_num", rh.previousHeadBlock),
+	zlog.Info("reconnecting hub after disconnection. expecting to reconnect",
 		zap.Error(err))
 
-	liveSource := h.liveSourceFactory(rh)
+	liveSource := h.liveSourceFactory(h)
 	liveSource.OnTerminating(func(err error) {
-		if rh.success {
-			h.reconnect(err)
-			return
-		}
-		failFunc()
+		h.reconnect(err)
+		return
 	})
 	go liveSource.Run()
 }
@@ -337,72 +455,4 @@ func substractAndRoundDownBlocks(blknum, sub uint64) uint64 {
 	}
 
 	return out
-}
-
-func (h *ForkableHub) processBlock(blk *pbbstream.Block, obj interface{}) error {
-	zlog.Debug("process_block", zap.Stringer("blk", blk.AsRef()), zap.Any("obj", obj.(*forkable.ForkableObject).Step()))
-	preprocBlock := &bstream.PreprocessedBlock{Block: blk, Obj: obj}
-
-	subscribers := h.subscribers // we may remove some from the original slice during the loop
-
-	for _, sub := range subscribers {
-		err := sub.push(preprocBlock)
-		if err != nil {
-			h.unsubscribe(sub)
-			sub.Shutdown(err)
-		}
-
-	}
-	return nil
-}
-
-type reconnectionHandler struct {
-	start             time.Time
-	timeout           time.Duration
-	previousHeadBlock uint64
-	headBlockGetter   func() uint64
-	handler           bstream.Handler
-	success           bool
-	onFailure         func()
-}
-
-func newReconnectionHandler(
-	h bstream.Handler,
-	headBlockGetter func() uint64,
-	timeout time.Duration,
-	onFailure func(),
-) *reconnectionHandler {
-	return &reconnectionHandler{
-		handler:           h,
-		headBlockGetter:   headBlockGetter,
-		previousHeadBlock: headBlockGetter(),
-		timeout:           timeout,
-		onFailure:         onFailure,
-	}
-}
-
-func (rh *reconnectionHandler) ProcessBlock(blk *pbbstream.Block, obj interface{}) error {
-	if !rh.success {
-		if rh.start.IsZero() {
-			rh.start = time.Now()
-		}
-		if time.Since(rh.start) > rh.timeout {
-			rh.onFailure()
-			return fmt.Errorf("reconnection failed")
-		}
-		// head block has moved, the blocks are linkable
-		if rh.headBlockGetter() > rh.previousHeadBlock {
-			zlog.Info("reconnection successful")
-			rh.success = true
-		}
-	}
-
-	err := rh.handler.ProcessBlock(blk, obj)
-	if err != nil {
-		if rh.headBlockGetter() == rh.previousHeadBlock {
-			rh.onFailure()
-		}
-		return err
-	}
-	return nil
 }

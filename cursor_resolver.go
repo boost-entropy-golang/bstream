@@ -164,7 +164,7 @@ func (f *cursorResolver) download(ctx context.Context, file *OneBlockFile) (*pbb
 	if err != nil {
 		return nil, err
 	}
-	return decodeOneblockfileData(data)
+	return DecodeOneblockfileData(data)
 }
 
 func (f *cursorResolver) seenIrreversible(id string) *BlockWithObj {
