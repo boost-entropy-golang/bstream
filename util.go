@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-
 	pbbstream "github.com/streamingfast/bstream/pb/sf/bstream/v1"
 )
 
