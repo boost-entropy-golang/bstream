@@ -16,6 +16,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -40,7 +41,6 @@ type ForkableHub struct {
 
 	keepFinalBlocks int
 
-	optionalHandler   bstream.Handler
 	subscribers       []*Subscription
 	sourceChannelSize int
 
@@ -318,6 +318,8 @@ func (h *ForkableHub) ProcessBlock(blk *pbbstream.Block, obj interface{}) error 
 	return h.forkable.ProcessBlock(blk, obj)
 }
 
+var errRestartRequired = errors.New("restart required")
+
 func (h *ForkableHub) linkLiveUsingOneBlocks(ctx context.Context, blk *pbbstream.Block) error {
 
 	lastKnownLib := h.forkable.LowestBlockNum()
@@ -357,7 +359,7 @@ func (h *ForkableHub) linkLiveUsingOneBlocks(ctx context.Context, blk *pbbstream
 
 		if blockFromFile.Number == blk.LibNum && h.forkable.ForkDBHasLib() {
 			if !h.forkable.Linkable(blockFromFile) {
-				return fmt.Errorf("cannot link block after reconnection, restart required")
+				return fmt.Errorf("cannot link block after reconnection, %w", errRestartRequired)
 			}
 		}
 
@@ -430,13 +432,17 @@ func (h *ForkableHub) broadcastBlock(blk *pbbstream.Block, obj interface{}) erro
 }
 
 func (h *ForkableHub) reconnect(err error) {
+	if errors.Is(err, errRestartRequired) {
+		h.Shutdown(err)
+		return
+	}
+
 	zlog.Info("reconnecting hub after disconnection. expecting to reconnect",
 		zap.Error(err))
 
 	liveSource := h.liveSourceFactory(h)
 	liveSource.OnTerminating(func(err error) {
 		h.reconnect(err)
-		return
 	})
 	go liveSource.Run()
 }

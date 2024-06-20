@@ -223,9 +223,15 @@ func (p *Forkable) blocksFromNum(num uint64) ([]*bstream.PreprocessedBlock, erro
 }
 
 func (p *Forkable) Linkable(blk *pbbstream.Block) bool {
+	if !p.forkDB.HasLIB() {
+		return false
+	}
+
+	targetLib := p.forkDB.LIBNum()
+
 	// blk is already in the forkdb
 	if _, ok := p.forkDB.links[blk.Id]; ok {
-		return !bstream.IsEmpty(p.forkDB.BlockInCurrentChain(blk.AsRef(), blk.LibNum))
+		return !bstream.IsEmpty(p.forkDB.BlockInCurrentChain(blk.AsRef(), targetLib))
 	}
 
 	// blk is not in the forkdb yet, look for it's parent and start there
@@ -234,7 +240,7 @@ func (p *Forkable) Linkable(blk *pbbstream.Block) bool {
 		if !found {
 			return false
 		}
-		return !bstream.IsEmpty(p.forkDB.BlockInCurrentChain(bstream.NewBlockRef(prevID, prevNum), blk.LibNum))
+		return !bstream.IsEmpty(p.forkDB.BlockInCurrentChain(bstream.NewBlockRef(prevID, prevNum), targetLib))
 	}
 
 	return false

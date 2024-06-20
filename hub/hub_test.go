@@ -2,10 +2,12 @@ package hub
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"github.com/streamingfast/dstore"
 	"testing"
 	"time"
+
+	"github.com/streamingfast/dstore"
 
 	"github.com/streamingfast/bstream"
 	"github.com/streamingfast/bstream/forkable"
@@ -115,7 +117,7 @@ func TestForkableHub_ProcessBlock(t *testing.T) {
 		oneBlocksAfterBootstrap  []*pbbstream.Block
 		blockToProcess           *pbbstream.Block
 		bufferSize               int
-		expectedError            error
+		expectedErrorIs          error
 		expectedForkableLibNum   uint64
 		expectedHeadBlock        string
 	}{
@@ -130,7 +132,7 @@ func TestForkableHub_ProcessBlock(t *testing.T) {
 			oneBlocksAfterBootstrap: []*pbbstream.Block{},
 			blockToProcess:          bstream.TestBlockWithLIBNum("00000009", "00000008", 3),
 			bufferSize:              0,
-			expectedError:           nil,
+			expectedErrorIs:         nil,
 			expectedForkableLibNum:  3,
 			expectedHeadBlock:       "00000009",
 		},
@@ -152,7 +154,7 @@ func TestForkableHub_ProcessBlock(t *testing.T) {
 
 			blockToProcess:         bstream.TestBlockWithLIBNum("00000012", "00000011a", 3),
 			bufferSize:             0,
-			expectedError:          nil,
+			expectedErrorIs:        nil,
 			expectedForkableLibNum: 3,
 			expectedHeadBlock:      "00000012",
 		},
@@ -173,7 +175,7 @@ func TestForkableHub_ProcessBlock(t *testing.T) {
 
 			blockToProcess:         bstream.TestBlockWithLIBNum("00000012", "00000011a", 3),
 			bufferSize:             0,
-			expectedError:          nil,
+			expectedErrorIs:        nil,
 			expectedForkableLibNum: 3,
 			expectedHeadBlock:      "00000011b",
 		},
@@ -194,7 +196,7 @@ func TestForkableHub_ProcessBlock(t *testing.T) {
 
 			blockToProcess:         bstream.TestBlockWithLIBNum("00000012", "00000011a", 0x10),
 			bufferSize:             0,
-			expectedError:          fmt.Errorf("cannot link block after reconnection, restart required"),
+			expectedErrorIs:        errRestartRequired,
 			expectedForkableLibNum: 3,
 			expectedHeadBlock:      "00000011b",
 		},
@@ -217,9 +219,10 @@ func TestForkableHub_ProcessBlock(t *testing.T) {
 			AddToMockStore(t, testOneBlockStore, test.oneBlocksAfterBootstrap...)
 
 			err = fh.ProcessBlock(test.blockToProcess, nil)
-			assert.Equal(t, test.expectedError, err)
 
-			if test.expectedError == nil {
+			if test.expectedErrorIs != nil {
+				assert.True(t, errors.Is(err, test.expectedErrorIs))
+			} else {
 				assert.Equal(t, fh.forkable.LowestBlockNum(), test.expectedForkableLibNum)
 
 				_, headID, _, _, err := fh.forkable.HeadInfo()
