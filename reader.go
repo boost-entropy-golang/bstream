@@ -117,12 +117,19 @@ func supportLegacy(b *pbbstream.Block) error {
 		case pbbstream.Protocol_COSMOS:
 			b.Payload.TypeUrl = "type.googleapis.com/sf.cosmos.type.v1.Block"
 		case pbbstream.Protocol_SOLANA:
-			if _, ok := os.LookupEnv("ACCEPT_SOLANA_LEGACY_BLOCK_FORMAT"); ok {
+			_, solanaLegacy := os.LookupEnv("ACCEPT_SOLANA_LEGACY_BLOCK_FORMAT")
+			_, legacy := os.LookupEnv("ACCEPT_LEGACY_BLOCK_FORMAT")
+
+			if solanaLegacy || legacy {
 				b.Payload.TypeUrl = "type.googleapis.com/sf.solana.type.v1.Block"
 				break
 			}
 			return fmt.Errorf("old block format from Solana protocol not supported, migrate your blocks")
 		case pbbstream.Protocol_NEAR:
+			if _, ok := os.LookupEnv("ACCEPT_LEGACY_BLOCK_FORMAT"); ok {
+				b.Payload.TypeUrl = "type.googleapis.com/sf.near.type.v1.Block"
+				break
+			}
 			return fmt.Errorf("old block format from NEAR protocol not supported, migrate your blocks")
 		}
 		b.Payload.Value = b.PayloadBuffer
