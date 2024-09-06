@@ -27,7 +27,7 @@ var EmptyCursor = &Cursor{
 }
 
 func (c *Cursor) IsOnFinalBlock() bool {
-	return c.Block.Num() == c.LIB.Num() && c.Step.Matches(StepIrreversible)
+	return c.Block.Num() == c.LIB.Num()
 }
 
 func (c *Cursor) ToOpaque() string {
