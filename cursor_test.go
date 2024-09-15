@@ -31,6 +31,17 @@ func TestFromString(t *testing.T) {
 			nil,
 		},
 		{
+			"c1 stepnewirreversible with LIB",
+			"c1:17:20737275:56c6c96333f4cb6a0d9996b4c75370f19944fedecf42ce77d941fe7d58ddba2f:20737275:56c6c96333f4cb6a0d9996b4c75370f19944fedecf42ce77d941fe7d58ddba2f",
+			&Cursor{
+				Step:      StepNewIrreversible,
+				Block:     ref(20737275, "56c6c96333f4cb6a0d9996b4c75370f19944fedecf42ce77d941fe7d58ddba2f"),
+				HeadBlock: ref(20737275, "56c6c96333f4cb6a0d9996b4c75370f19944fedecf42ce77d941fe7d58ddba2f"),
+				LIB:       ref(20737275, "56c6c96333f4cb6a0d9996b4c75370f19944fedecf42ce77d941fe7d58ddba2f"),
+			},
+			nil,
+		},
+		{
 			"c2 full",
 			"c2:1:7393903:e9e04d1f639ffd8491fd3c90153b341e68a2ef9aaa72337dc926d928384f8f71:7393905:4c01ca1daced994d7a87faa92a14a360a1b2f64340d97e82b579915765c36663",
 			&Cursor{
@@ -41,7 +52,6 @@ func TestFromString(t *testing.T) {
 			},
 			nil,
 		},
-
 		{
 			"c3 full",
 			"c3:1:7393903:e9e04d1f639ffd8491fd3c90153b341e68a2ef9aaa72337dc926d928384f8f71:7393905:4c01ca1daced994d7a87faa92a14a360a1b2f64340d97e82b579915765c36663:7393704:fc119c952209a330f6276f98cff168e4cd14f6edd34505e8d67a5e929d48d93a",
