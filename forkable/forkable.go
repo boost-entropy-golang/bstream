@@ -489,11 +489,16 @@ func (fobj *ForkableObject) Cursor() *bstream.Cursor {
 		return bstream.EmptyCursor
 	}
 
+	lib := fobj.lastLIBSent
+	if lib.Num() > fobj.block.Num() {
+		lib = fobj.block
+	}
+
 	return &bstream.Cursor{
 		Step:      fobj.step,
 		Block:     fobj.block,
 		HeadBlock: fobj.headBlock,
-		LIB:       fobj.lastLIBSent,
+		LIB:       lib,
 	}
 }
 
