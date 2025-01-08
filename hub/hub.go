@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,11 +53,24 @@ type ForkableHub struct {
 }
 
 func NewForkableHub(liveSourceFactory bstream.SourceFactory, keepFinalBlocks int, oneBlocksStore dstore.Store, extraForkableOptions ...forkable.Option) *ForkableHub {
+	sourceChanSize := 100
+	if os.Getenv("SOURCE_CHAN_SIZE") != "" {
+		newSize, err := strconv.Atoi(os.Getenv("SOURCE_CHAN_SIZE"))
+		if err != nil {
+			zlog.Warn("invalid SOURCE_CHAN_SIZE, ignoring", zap.Error(err))
+		}
+		sourceChanSize = newSize
+	}
+	zlog.Info("New forkable hub initialized",
+		zap.Int("source_chan_size", sourceChanSize),
+		zap.Int("keep_final_blocks", keepFinalBlocks),
+	)
+
 	hub := &ForkableHub{
 		Shutter:           shutter.New(),
 		liveSourceFactory: liveSourceFactory,
 		keepFinalBlocks:   keepFinalBlocks,
-		sourceChannelSize: 100, // number of blocks that can add up before the subscriber processes them
+		sourceChannelSize: sourceChanSize, // number of blocks that can add up before the subscriber processes them
 		oneBlocksStore:    oneBlocksStore,
 		Ready:             make(chan struct{}),
 	}
