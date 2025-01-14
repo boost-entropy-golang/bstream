@@ -59,6 +59,7 @@ type FileSource struct {
 	fileStream                chan *incomingBlocksFile
 	highestFileProcessedBlock BlockRef
 	blockIndexProvider        BlockIndexProvider
+	errorOutOnMissingFile     bool
 
 	// these blocks will be included even if the filter does not want them.
 	// If we are on a chain that skips block numbers, the NEXT block will be sent.
@@ -111,6 +112,16 @@ func FileSourceWithBundleSize(bundleSize uint64) FileSourceOption {
 func FileSourceWithBlockIndexProvider(prov BlockIndexProvider) FileSourceOption {
 	return func(s *FileSource) {
 		s.blockIndexProvider = prov
+	}
+}
+
+// FileSourceErrorOnMissingMergedBlocksFile will make the file source fail if the merged blocks file is missing
+// instead of waiting for it forever.
+//
+// Useful for tools that leverage FileSource but expects all files to be present.
+func FileSourceErrorOnMissingMergedBlocksFile() FileSourceOption {
+	return func(s *FileSource) {
+		s.errorOutOnMissingFile = true
 	}
 }
 
@@ -604,6 +615,11 @@ func (s *FileSource) launchReader() {
 		}
 
 		if !exists {
+			if s.errorOutOnMissingFile {
+				s.Shutdown(fmt.Errorf("filesource: missing file %q", s.blocksStore.ObjectPath(baseFilename)))
+				return
+			}
+
 			s.logger.Debug("reading from blocks store: file does not (yet?) exist, retrying in", zap.String("filename", s.blocksStore.ObjectPath(baseFilename)), zap.String("base_filename", baseFilename), zap.Any("retry_delay", s.retryDelay))
 			delay = s.retryDelay
 			continue
